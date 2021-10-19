@@ -1,0 +1,8 @@
+__pycache__/
+journal/
+*.bak
+*.zip
+*.lnk
+*.pyc
+*.pkl
+~*.*

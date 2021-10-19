@@ -1,0 +1,50 @@
+<class 'pandas.core.frame.DataFrame'>
+RangeIndex: 12313 entries, 0 to 12312
+Data columns (total 10 columns):
+ #   Column   Non-Null Count  Dtype  
+---  ------   --------------  -----  
+ 0   IDELSA   12313 non-null  object 
+ 1   Gender   12313 non-null  object 
+ 2   Age      12313 non-null  int64  
+ 3   SCr      12310 non-null  float64
+ 4   UCr      12313 non-null  int64  
+ 5   UAlb_ay  12227 non-null  object 
+ 6   UAlb_az  12216 non-null  object 
+ 7   UVol     12313 non-null  int64  
+ 8   UDur     12313 non-null  int64  
+ 9   Race     12173 non-null  object 
+dtypes: float64(1), int64(4), object(5)
+memory usage: 962.1+ KB
+
+----------------------------------------------------------------------------
+*** POINT ESTIMATION APPROACH ***
+----------------------------------------------------------------------------
+
+Number of rejected samples:    91
+Number of accepted samples: 12222
+
+Number of individuals with DRC,  exclusively according to Condition 1:   740
+Number of individuals with DRC,  exclusively according to Condition 2:   200
+Number of individuals with DRC,  according to both   conditions .....:    66
+Number of individuals with DRC,  according to either conditions .....:  1006
+
+Prevalence of DRC in the sample, exclusively according to Condition 1: 0.061
+Prevalence of DRC in the sample, exclusively according to Condition 2: 0.016
+Prevalence of DRC in the sample, according to both   conditions .....: 0.005
+Prevalence of DRC in the sample, according to either conditions .....: 0.082
+
+-------------------------------------------------------------------------------------
+*** INTERVAL ESTIMATION, NON-PARAMETRIC APPROACH (BOOTSTRAP 95.0% IC) ***
+-------------------------------------------------------------------------------------
+
+Prevalence of DRC in the sample, according to either conditions .....: [0.082, 0.087]
+Prevalence of DRC in the sample, according to Condition 1 ...........: [0.066, 0.070]
+Prevalence of DRC in the sample, according to Condition 2 ...........: [0.021, 0.023]
+
+-------------------------------------------------------------------------------------
+*** INTERVAL ESTIMATION, PARAMETRIC APPROACH (NORMAL 95.0% IC) ***
+-------------------------------------------------------------------------------------
+
+Prevalence of DRC in the sample, according to either conditions .....: [0.082, 0.087]
+Prevalence of DRC in the sample, according to Condition 1 ...........: [0.065, 0.070]
+Prevalence of DRC in the sample, according to Condition 2 ...........: [0.021, 0.023]

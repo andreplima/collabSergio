@@ -1,19 +1,22 @@
 """
-  This script is based on epidemiological parameters published on the literature on biomedical sciences.
-  Particularly, it assumes that data from the following articles are valid for the Brazilian population:
+  This script is based on epidemiological parameters published in the literature on biomedical
+  sciences. Particularly, it assumes that parameters from the following articles are valid for the
+  Brazilian population:
 
   [1] Sandhi M Barreto, Roberto M Ladeira, Bruce B Duncan, Maria Ines Sch-midt, Antonio A Lopes,
-      Isabela M Benseñor, Dora Chor, Rosane H Griep,Pedro G Vidigal, Antonio L Ribeiro, Paulo A Lotufo, and
-      José Geraldo Mill. Chronic kidney disease among adult participants of the ELSA-brasil cohort:
-      association with race and socioeconomic position. Journal of Epidemiology & Community Health,
-      70(4):380–389, 2016.
+      Isabela M Benseñor, Dora Chor, Rosane H Griep,Pedro G Vidigal, Antonio L Ribeiro,
+      Paulo A Lotufo, and José G Mill. Chronic kidney disease among adult participants of the
+      ELSA-brasil cohort: association with race and socioeconomic position. Journal of Epidemiology
+      & Community Health, 70(4):380–389, 2016.
 
   [2] Andrew S Levey, Lesley A Stevens, Christopher H Schmid, Yaping Zhang, Alejandro F Castro III,
       Harold I Feldman, John W Kusek, Paul Eggers, Frederick Van Lente, Tom Greene, et al.
       A new equation to estimate glomerular filtration rate. Annals of Internal Medicine,
       150(9):604–612, 2009
 
-  [3] Efron, Bradley, and Robert J. Tibshirani. An introduction to the Bootstrap. Chapman & Hall/CRC (1993)
+  Also,
+
+  [3] Bradley Efron and Robert Tibshirani. An introduction to the Bootstrap. Chapman & Hall/CRC (1994)
 
 """
 import numpy  as np
@@ -21,11 +24,13 @@ import pandas as pd
 
 from os.path     import join
 from collections import namedtuple
-from scipy.stats import norm, bootstrap, t as tdist
+from scipy.stats import norm, bootstrap, sem, t as tdist
 
-ECO_SEED   = 31
-ECO_FEMALE = 'Feminino'
-ECO_BLACK  = 'Preta'
+ECO_SEED     = 31
+ECO_FEMALE   = 'Feminino'
+ECO_NOGENDER = 'Ignorar Gênero'
+ECO_BLACK    = 'Preta'
+ECO_NORACE   = 'Ignorar Raça'
 
 ECO_RECORD_FIELDS = ['eGFR', 'ACR', 'DRC_C1', 'DRC_C2', 'DRC_AND', 'DRC_OR']
 Record            = namedtuple('Record', ECO_RECORD_FIELDS)
@@ -34,11 +39,11 @@ ECO_DRC_C2        = ECO_RECORD_FIELDS.index('DRC_C2')
 ECO_DRC_AND       = ECO_RECORD_FIELDS.index('DRC_AND')
 ECO_DRC_OR        = ECO_RECORD_FIELDS.index('DRC_OR')
 
-ECO_CL   = 0.95  # this is the level of confidence used in [1]
-ECO_BSNR = 5
-ECO_BSSS = 1000
+ECO_CL   = 0.95   # this is the level of confidence used in [1]
+ECO_BSNR = 100    # number of resamples   used in bootstrap estimations
+ECO_BSSS = 1000   # size of the resamples used in bootstrap estimations
 
-IC_field = namedtuple('IC', ['low', 'high'])
+IC_field = namedtuple('IC_field', ['low', 'high'])
 class IC:
   def __init__(self, low, high):
     self.confidence_interval = IC_field(low, high)
@@ -67,7 +72,7 @@ def recast_UAlb(val):
 
 def compute_eGFR(SCr, Age, Gender, Race):
   """
-  Computes the estimated GFR (glomerular filtration rate) using the CKD-EPI equation described in [1].
+  Computes the estimated GFR (glomerular filtration rate) using the CKD-EPI equation in [1].
 
   Assumes:
   - SCr    in micrograms per deciliter
@@ -133,23 +138,19 @@ def compute_C2(ACR):
 
 def resample(dataset, feature, ns, ss):
   """
-  Resamples the <dataset> to obtain <ns> sets with <ss> original samples.
-  This resampling is required by compute_prevalence_ic_bs.
+  Resamples the <dataset> to obtain <ns> sets with <ss> original samples each.
+  This resampling is used in bootstrapping estimations.
   """
 
   dataset_cut = [e[feature] for e in dataset]
 
-  if(ss == -1):
-    res = [dataset_cut]
+  res = []
+  for i in range(ns):
+    np.random.seed(ECO_SEED + i % ECO_SEED)
+    res.append(np.random.choice(dataset_cut, size = ss))
+  np.random.seed(ECO_SEED)
 
-  else:
-
-    res = []
-    for i in range(ns):
-      np.random.seed(ECO_SEED + i % ECO_SEED)
-      res.append(np.random.choice(dataset_cut, size = ss))
-    np.random.seed(ECO_SEED)
-    return res
+  return res
 
 def compute_prevalence_ic_na(resamples, level):
   """
@@ -162,9 +163,9 @@ def compute_prevalence_ic_na(resamples, level):
     data.append(sum(resample)/len(resample))
   ddof = len(data) - 1
   mu   = np.mean(data)
-  sd   = np.std(data, ddof=1)#try with ddof
-  ww   = tdist.ppf((1 + level) / 2., ddof)
-  res  = IC(mu - ww * sd, mu + ww * sd)
+  se   = sem(data)
+  zv   = tdist.ppf((1 + level) / 2., ddof)
+  res  = IC(mu - zv * se, mu + zv * se)
   return res
 
 def compute_prevalence_ic_bs(resamples, level):
@@ -175,14 +176,15 @@ def compute_prevalence_ic_bs(resamples, level):
   data = []
   for resample in resamples:
     data.append(sum(resample)/len(resample))
-  res = bootstrap((data,), np.mean, confidence_level = level)
+  res = bootstrap((data,), np.mean, confidence_level = level, method = 'percentile')
   return res
 
 def main():
 
   # defines the application parameters
   np.random.seed(ECO_SEED)
-  targetpath = ['D:\\', 'Task Stage', 'Task - collabSergio', 'collabSergio', 'datasets']
+  #targetpath = ['D:\\', 'Task Stage', 'Task - collabSergio', 'collabSergio', 'datasets']
+  targetpath = ['C:\\', 'Users', 'Andre', 'Task Stage', 'Task - collabSergio', 'collabSergio', 'datasets']
   filename   = 'ELSA_Prevalence.tsv'
 
   # loads the dataset
@@ -195,7 +197,7 @@ def main():
   for index, row in df.iterrows():
     (IDELSA, Gender, Age, SCr, UCr, UAlb_ay, UAlb_az, UVol, UDur, Race) = row
     UAlb = recast_UAlb(UAlb_ay)
-    eGFR = compute_eGFR(SCr, Age, Gender, Race)
+    eGFR = compute_eGFR(SCr, Age, Gender, ECO_NORACE) # no adjustments for race, as in [1]
     ACR  = compute_ACR(UAlb, UCr, UDur, UVol)
     if(eGFR is None or ACR is None):
       rejected[IDELSA] = Record(eGFR, ACR, None, None, None, None)
@@ -221,10 +223,10 @@ def main():
   print('Number of accepted samples: {0:5d}'.format(len(accepted)))
 
   print()
-  print('Number of individuals with DRC,  exclusively according to Condition 1:   {0:3d}'.format(count_drc_c1))
-  print('Number of individuals with DRC,  exclusively according to Condition 2:   {0:3d}'.format(count_drc_c2))
-  print('Number of individuals with DRC,  according to both   conditions .....:   {0:3d}'.format(count_drc_and))
-  print('Number of individuals with DRC,  according to either conditions .....:   {0:3d}'.format(count_drc_or))
+  print('Number of individuals with DRC,  exclusively according to Condition 1:  {0:4d}'.format(count_drc_c1))
+  print('Number of individuals with DRC,  exclusively according to Condition 2:  {0:4d}'.format(count_drc_c2))
+  print('Number of individuals with DRC,  according to both   conditions .....:  {0:4d}'.format(count_drc_and))
+  print('Number of individuals with DRC,  according to either conditions .....:  {0:4d}'.format(count_drc_or))
 
   print()
   print('Prevalence of DRC in the sample, exclusively according to Condition 1: {0:5.3f}'.format(count_drc_c1/N))
@@ -236,44 +238,40 @@ def main():
   # estimates the confidence interval of the parameters of interest in the accepted samples
   sample = [e for e in accepted.values()]
 
-  resamples_drc_c1  = resample(sample, feature = ECO_DRC_C1,  ns = ECO_BSNR, ss = ECO_BSSS)
-  resamples_drc_c2  = resample(sample, feature = ECO_DRC_C2,  ns = ECO_BSNR, ss = ECO_BSSS)
-  resamples_drc_and = resample(sample, feature = ECO_DRC_AND, ns = ECO_BSNR, ss = ECO_BSSS)
-  resamples_drc_or  = resample(sample, feature = ECO_DRC_OR,  ns = ECO_BSNR, ss = ECO_BSSS)
+  resamples_drc_or  = resample(sample, feature = ECO_DRC_OR, ns = ECO_BSNR, ss = ECO_BSSS)
+  resamples_drc_c1  = resample(sample, feature = ECO_DRC_C1, ns = ECO_BSNR, ss = ECO_BSSS)
+  resamples_drc_c2  = resample(sample, feature = ECO_DRC_C2, ns = ECO_BSNR, ss = ECO_BSSS)
 
   print()
-  print('----------------------------------------------------------------------------')
-  print('*** INTERVAL ESTIMATION APPROACH (PARAMETRIC - NORMAL) ***')
-  print('----------------------------------------------------------------------------')
+  print('-------------------------------------------------------------------------------------')
+  print('*** INTERVAL ESTIMATION, NON-PARAMETRIC APPROACH (BOOTSTRAP {0}% IC) ***'.format(ECO_CL * 100))
+  print('-------------------------------------------------------------------------------------')
 
-  ic_p_hat_c1  = compute_prevalence_ic_na(resamples_drc_c1,  level = ECO_CL)
-  ic_p_hat_c2  = compute_prevalence_ic_na(resamples_drc_c2,  level = ECO_CL)
-  ic_p_hat_and = compute_prevalence_ic_na(resamples_drc_and, level = ECO_CL)
-  ic_p_hat_or  = compute_prevalence_ic_na(resamples_drc_or,  level = ECO_CL)
-
-  print()
-  print('Prevalence of DRC in the sample, exclusively according to Condition 1: [{0:5.3f}, {1:5.3f}]'.format(ic_p_hat_c1.confidence_interval.low, ic_p_hat_c1.confidence_interval.high))
-  print('Prevalence of DRC in the sample, exclusively according to Condition 2: [{0:5.3f}, {1:5.3f}]'.format(ic_p_hat_c2.confidence_interval.low, ic_p_hat_c2.confidence_interval.high))
-  print('Prevalence of DRC in the sample, according to both   conditions .....: [{0:5.3f}, {1:5.3f}]'.format(ic_p_hat_and.confidence_interval.low, ic_p_hat_and.confidence_interval.high))
-  print('Prevalence of DRC in the sample, according to either conditions .....: [{0:5.3f}, {1:5.3f}]'.format(ic_p_hat_or.confidence_interval.low,  ic_p_hat_or.confidence_interval.high))
+  ic_p_hat_or = compute_prevalence_ic_bs(resamples_drc_or, level = ECO_CL)
+  ic_p_hat_c1 = compute_prevalence_ic_bs(resamples_drc_c1, level = ECO_CL)
+  ic_p_hat_c2 = compute_prevalence_ic_bs(resamples_drc_c2, level = ECO_CL)
 
   print()
-  print('----------------------------------------------------------------------------')
-  print('*** INTERVAL ESTIMATION APPROACH (NON-PARAMETRIC - BOOTSTRAP) ***')
-  print('----------------------------------------------------------------------------')
-
-  ic_p_hat_c1  = compute_prevalence_ic_bs(resamples_drc_c1,  level = ECO_CL)
-  ic_p_hat_c2  = compute_prevalence_ic_bs(resamples_drc_c2,  level = ECO_CL)
-  ic_p_hat_and = compute_prevalence_ic_bs(resamples_drc_and, level = ECO_CL)
-  ic_p_hat_or  = compute_prevalence_ic_bs(resamples_drc_or,  level = ECO_CL)
+  print('Prevalence of DRC in the sample, according to either conditions .....: [{0:5.3f}, {1:5.3f}]'.format(ic_p_hat_or.confidence_interval.low, ic_p_hat_or.confidence_interval.high))
+  print('Prevalence of DRC in the sample, according to Condition 1 ...........: [{0:5.3f}, {1:5.3f}]'.format(ic_p_hat_c1.confidence_interval.low, ic_p_hat_c1.confidence_interval.high))
+  print('Prevalence of DRC in the sample, according to Condition 2 ...........: [{0:5.3f}, {1:5.3f}]'.format(ic_p_hat_c2.confidence_interval.low, ic_p_hat_c2.confidence_interval.high))
 
   print()
-  print('Prevalence of DRC in the sample, exclusively according to Condition 1: [{0:5.3f}, {1:5.3f}]'.format(ic_p_hat_c1.confidence_interval.low, ic_p_hat_c1.confidence_interval.high))
-  print('Prevalence of DRC in the sample, exclusively according to Condition 2: [{0:5.3f}, {1:5.3f}]'.format(ic_p_hat_c2.confidence_interval.low, ic_p_hat_c2.confidence_interval.high))
-  print('Prevalence of DRC in the sample, according to both   conditions .....: [{0:5.3f}, {1:5.3f}]'.format(ic_p_hat_and.confidence_interval.low, ic_p_hat_and.confidence_interval.high))
-  print('Prevalence of DRC in the sample, according to either conditions .....: [{0:5.3f}, {1:5.3f}]'.format(ic_p_hat_or.confidence_interval.low,  ic_p_hat_or.confidence_interval.high))
+  print('-------------------------------------------------------------------------------------')
+  print('*** INTERVAL ESTIMATION, PARAMETRIC APPROACH (NORMAL {0}% IC) ***'.format(ECO_CL * 100))
+  print('-------------------------------------------------------------------------------------')
 
-def test():
+  ic_p_hat_or = compute_prevalence_ic_na(resamples_drc_or, level = ECO_CL)
+  ic_p_hat_c1 = compute_prevalence_ic_na(resamples_drc_c1, level = ECO_CL)
+  ic_p_hat_c2 = compute_prevalence_ic_na(resamples_drc_c2, level = ECO_CL)
+
+  print()
+  print('Prevalence of DRC in the sample, according to either conditions .....: [{0:5.3f}, {1:5.3f}]'.format(ic_p_hat_or.confidence_interval.low, ic_p_hat_or.confidence_interval.high))
+  print('Prevalence of DRC in the sample, according to Condition 1 ...........: [{0:5.3f}, {1:5.3f}]'.format(ic_p_hat_c1.confidence_interval.low, ic_p_hat_c1.confidence_interval.high))
+  print('Prevalence of DRC in the sample, according to Condition 2 ...........: [{0:5.3f}, {1:5.3f}]'.format(ic_p_hat_c2.confidence_interval.low, ic_p_hat_c2.confidence_interval.high))
+
+
+def test1():
 
   rng  = np.random.default_rng()
   dist = norm(loc=2, scale=4)  # our "unknown" distribution
@@ -288,5 +286,5 @@ def test():
 
 if __name__ == "__main__":
 
+  #test1()
   main()
-  #test()
