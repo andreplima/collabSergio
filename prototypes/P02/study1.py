@@ -122,7 +122,7 @@ def compute_ACR(UAlb, UCr, UDur, UVol):
 
   try:
     if(UAlb > 0.0 and UCr > 0.0 and UDur > 0 and UVol > 0):
-      res = UAlb * UDur * (1 / UVol) * (1 / UCr) * (1 / 100)
+      res = UAlb * UDur * (1 / UVol) * (1 / UCr) * (1 / 100) # acho que tá errado
     else:
       res = None
   except TypeError:

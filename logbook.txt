@@ -27,3 +27,6 @@ https://www.ajkd.org/article/S0272-6386(21)00707-1/fulltext
 
 https://www-s.nist.gov/srmors/view_detail.cfm?srm=967A
 https://webapps.cap.org/apps/docs/proficiency_testing/surveys_catalog/chapter_11.pdf
+
+[3/17/2022 4:35:34 PM] Trazendo o Caderno 1 da Etapa 2 para cá. O objetivo é montar o código da rede neural especializada aqui.
+
