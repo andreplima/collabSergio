@@ -8,6 +8,9 @@ from scipy.stats import bootstrap
 from sharedDefs  import serialise, deserialise
 from sklearn.neighbors import NearestNeighbors
 
+import warnings
+warnings.filterwarnings('error')
+
 def encodeGender(gender):
   if(gender not in ['Feminino', 'Masculino']):
     return np.nan
@@ -153,8 +156,6 @@ def load_ELSA():
   #ds['segment'] = ds.apply(lambda row: '{0}{1}'.format(row.Gender, row.Race), axis=1)
   ds['segment'] = ds.apply(lambda row: '{0}{1}{2}'.format(row.Gender, row.Race, 1 if (row.hasDM + row.hasHTN + row.hadCS + row.hadCVA + row.hadMI) > 0 else 0), axis=1)
 
-  #xxx normalise features?
-
   return ds
 
 def split(ds):
@@ -178,22 +179,32 @@ def doit(Tr_healthy, Te_healthy, Te_unhealthy, params):
 
   def pm(agepairs):
     """
-    performance metric
+    Performance metric used in assessing the hypothesis
     """
     #print(agepairs[0:3])
-    agediffs = [(age - neighbors_age) for (age, neighbors_age) in agepairs]    # bias
-    #agediffs = [abs(age - neighbors_age) for (age, neighbors_age) in agepairs] # MAE
+    agediffs = [(age_real - age_pred) for (age_real, age_pred) in agepairs]    # bias
+    #agediffs = [abs(age_real - age_pred) for (age_real, age_pred) in agepairs] # MAE
     return np.mean(agediffs)
 
-    #agediffs = [(age - neighbors_age)**2 for (age, neighbors_age) in agepairs] # RMSE
+    #agediffs = [(age_real - age_pred)**2 for (age_real, age_pred) in agepairs] # RMSE
     #return np.sqrt(np.mean(agediffs))
+
+  def estimageAge(dists, ages):
+    """
+    Computes the average age of nearest neighbours weighted by their distances to the queried sample
+    """
+    epsilon = 1E-9
+    dists_rec = 1/(dists[0] + epsilon)
+    sum_dists_rec = dists_rec.sum()
+    weights = dists_rec/sum_dists_rec
+    eAge = ages.dot(weights)[0]
+    return eAge
 
   pm_neg = {}
   pm_pos = {}
   partsizes = defaultdict(dict)
   segments = Tr_healthy['segment'].unique()
   for segment in sorted(segments):
-    #print('-- segment {0}'.format(segment))
 
     # trains a nearest neighbour model using data from Tr_healthy (only healthy individuals)
     model = NearestNeighbors(n_neighbors = n_neighbors, algorithm = 'auto', metric = 'minkowski', p = 2)
@@ -208,8 +219,9 @@ def doit(Tr_healthy, Te_healthy, Te_unhealthy, params):
     partsizes['ckd-'][segment] = nrows
     agepairs = []
     for i in range(nrows):
-      neighbors = model.kneighbors(Xneg[i].reshape(1, -1), return_distance=False)
-      agepairs.append((yneg[i], y[neighbors].mean()))
+      dists, neighbors = model.kneighbors(Xneg[i].reshape(1, -1), return_distance=True)
+      eAge = estimageAge(dists, y[neighbors])
+      agepairs.append((yneg[i], eAge))
     pm_neg[segment] = pm(agepairs)
 
     # evaluates the performance metric of age prediction for unhealthy individuals
@@ -219,8 +231,9 @@ def doit(Tr_healthy, Te_healthy, Te_unhealthy, params):
     partsizes['ckd+'][segment] = nrows
     agepairs = []
     for i in range(nrows):
-      neighbors = model.kneighbors(Xpos[i].reshape(1, -1), return_distance=False)
-      agepairs.append((ypos[i], y[neighbors].mean()))
+      dists, neighbors = model.kneighbors(Xpos[i].reshape(1, -1), return_distance=True)
+      eAge = estimageAge(dists, y[neighbors])
+      agepairs.append((ypos[i], eAge))
     pm_pos[segment] = pm(agepairs)
 
   return (pm_neg, pm_pos, partsizes)
@@ -283,8 +296,8 @@ def main(n_neighbors, tries):
 
   num_of_ckdpos = len(ds.loc[(ds['hasCKD'] >  0)])
   num_of_ckdneg = len(ds.loc[(ds['hasCKD'] == 0)])
-  print('-- number of CKD+ individuals: {0}'.format(num_of_ckdpos))
-  print('-- number of CKD- individuals: {0}'.format(num_of_ckdneg))
+  print('-- number of CKD+ individuals: {0:5d}'.format(num_of_ckdpos))
+  print('-- number of CKD- individuals: {0:5d}'.format(num_of_ckdneg))
 
   print('Learning and assessing the model of renal age')
   #predVars = ['eDCE', 'SCr', 'eACR', 'height', 'weight']
