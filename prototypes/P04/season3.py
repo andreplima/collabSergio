@@ -2,18 +2,11 @@ import sys
 import numpy as np
 import pandas as pd
 
+from os.path     import exists
+from collections import defaultdict
+from scipy.stats import bootstrap
+from sharedDefs  import serialise, deserialise
 from sklearn.neighbors import NearestNeighbors
-
-#import statsmodels.api as sm
-
-#from copy import copy
-#from collections import defaultdict
-#from matplotlib import pyplot as plt
-#from matplotlib.collections import LineCollection
-#from sklearn.model_selection import train_test_split
-#from sklearn.metrics import mean_squared_error, r2_score, explained_variance_score
-#from sklearn.decomposition import PCA
-#from sklearn.neural_network import MLPRegressor
 
 def encodeGender(gender):
   if(gender not in ['Feminino', 'Masculino']):
@@ -26,15 +19,23 @@ def encodeRace(race):
   return 1 if race != 'Branco' else 0
 
 def estimate_GFR_CKDEPI(scr, age, gender, race):
-  # parameters:
-  #   scr is serum creatinine measured in mg/dL using (PREENCHER tipo de assay, see https://youtu.be/KcoeVtiYGpU)
-  #   age in years, gender and race as strings in the domains described above
-  #   gender: female is encoded as 1, and male as 0
-  #   race: white is encoded as 0, and non-whites (including blacks) as 1
-  #   -- returns estimated GFR in mL/min/1.73m^2
-  # estimador descrito no artigo https://www.ncbi.nlm.nih.gov/pmc/articles/PMC2763564/, página 14 (rodapé da tabela)
-  # divergência com valores calculados por https://www.sbn.org.br/profissional/utilidades/calculadoras-nefrologicas/ ...
-  # ... se deve ao fato desta usar as 8 equações individuais, nas quais o primeiro coeficiente é arredondado
+  """
+  Estimates the GFR of an individual using the CKD-epi equation
+
+  Parameters:
+    scr is serum creatinine measured in mg/dL using
+    -- (PREENCHER tipo de assay, see https://youtu.be/KcoeVtiYGpU)
+    age in years, gender and race as strings in the domains described above and encoded as:
+    -- gender: female is encoded as 1, and male as 0
+    -- race: white is encoded as 0, and non-whites (including blacks) as 1
+  Returns
+    estimated GFR in mL/min/1.73m^2
+    -- see https://www.ncbi.nlm.nih.gov/pmc/articles/PMC2763564/, page 14 (see table footnote)
+
+  Divergência com valores calculados por https://www.sbn.org.br/profissional/utilidades/calculadoras-nefrologicas/ ...
+  ... se deve ao fato desta usar as 8 equações individuais, nas quais o primeiro coeficiente é arredondado
+
+  """
 
   kappa = lambda gender:  0.7   if gender == 1 else  0.9
   alpha = lambda gender: -0.329 if gender == 1 else -0.411
@@ -49,29 +50,6 @@ def estimate_GFR_CKDEPI(scr, age, gender, race):
          )
 
   return eGFR
-
-# Calcula a idade a partir das demais variáveis da equação CKD-EPI, por manipulação algébrica
-def estimate_Age_CKDEPI(eGFR, scr, gender, race):
-  kappa = lambda gender:  0.7   if gender == 1 else  0.9
-  alpha = lambda gender: -0.329 if gender == 1 else -0.411
-  scr_k = scr/kappa(gender)
-  age = (1 / np.log(0.993) *
-          np.log(eGFR / (141
-                        * min(scr_k, 1) ** alpha(gender)
-                        * max(scr_k, 1) ** -1.209
-                        * (1.018 if gender == 1 else 1.0)
-                        * (1.159 if race   == 1 else 1.0)
-                        )
-                )
-        )
-  return round(age, 0)
-
-def estimate_BSA(height, weight):
-  # parameters:
-  #   height é a altura, em cm
-  #   weight é o peso em kG
-  bsa = 0.007184 * weight ** 0.425 * height ** 0.725
-  return bsa
 
 def estimate_GFR_DCE(ucr, scr, uvol, udur, height, weight):
   # parameters:
@@ -102,21 +80,28 @@ def estimate_ACR(ualb, udur, ucr, uvol):
   eACR = 1E2 * (ualb * udur)/(ucr * uvol)
   return eACR
 
+def estimate_BSA(height, weight):
+  # parameters:
+  #   height é a altura, em cm
+  #   weight é o peso em kG
+  bsa = 0.007184 * weight ** 0.425 * height ** 0.725
+  return bsa
+
 def hasCKD(eGFR, eACR, hasDM, hasHTN, hadCS, hadCVA, hadMI):
   if(eGFR < 60.0 or eACR >= 30.0):
     # from the "prognosis of CKD" table in https://kdigo.org/wp-content/uploads/2017/02/KDIGO_2012_CKD_GL.pdf, pdf-page 9
     result = 2
   elif(eGFR < 90.0 and (hasDM + hasHTN + hadCS + hadCVA + hadMI > 0)):
-    # this group is meant to represent individuals at some low CKD risk;
+    # this level is meant to represent individuals at some low CKD risk;
     # criterion from (PREENCHER!)
     result = 1
   else:
     result = 0
   return result
 
-#
 def load_ELSA():
 
+  #
   ds = pd.read_csv('../../datasets/DATASETELSA.tsv', sep='\t', decimal='.')
 
   #
@@ -164,65 +149,153 @@ def load_ELSA():
   ds['eBSA']   = ds.apply(lambda row: estimate_BSA(row.height, row.weight),  axis=1)
   ds['hasCKD'] = ds.apply(lambda row: hasCKD(row.eGFR, row.eACR, row.hasDM, row.hasHTN, row.hadCS, row.hadCVA, row.hadMI), axis=1)
 
+
+  # segments the dataset in gender and race groups
+  ds['segment'] = ds.apply(lambda row: '{0}{1}'.format(row.Gender, row.Race), axis=1)
+
+  #xxx normalise features?
+
   return ds
 
 def split(ds):
-  num_of_ckdpos = len(ds.loc[(ds['hasCKD'] >  0)])
 
   healthy = ds.loc[(ds['hasCKD'] == 0)]['IDElsa'].tolist()
-  healthy_te = np.random.choice(healthy, size=num_of_ckdpos, replace = False)
-  healthy_tr = [id for id in healthy if id not in healthy_te]
+  np.random.shuffle(healthy)
+  num_of_ckdpos = len(ds.loc[(ds['hasCKD'] > 0)])
+  healthy_te = healthy[:num_of_ckdpos]
+  healthy_tr = healthy[num_of_ckdpos:]
 
   Tr_healthy   = ds.loc[(ds['IDElsa'].isin(healthy_tr))]
   Te_healthy   = ds.loc[(ds['IDElsa'].isin(healthy_te))]
-  Te_unhealthy = ds.loc[(ds['hasCKD'] >  0)]
+  Te_unhealthy = ds.loc[(ds['hasCKD'] > 0)]
 
   return (Tr_healthy, Te_healthy, Te_unhealthy)
 
 def doit(Tr_healthy, Te_healthy, Te_unhealthy, params):
 
-  (predVars, outcome, nn) = params
+  # recover the model parameters
+  (predVars, outcome, n_neighbors) = params
 
-  model = NearestNeighbors(n_neighbours = nn)
-  X = Tr_healthy[predVars]
-  y = Tr_healthy[outcome]
-  model.fit(X, y)
+  def pm(agepairs):
+    """
+    performance metric
+    """
+    print(agepairs[0:3])
+    agediffs = [(age - neighbors_age) for (age, neighbors_age) in agepairs]    # bias
+    #agediffs = [abs(age - neighbors_age) for (age, neighbors_age) in agepairs] # MAE
+    return np.mean(agediffs)
 
-  v1 = 1
-  v2 = 2
-  return (v1, v2)
+    #agediffs = [(age - neighbors_age)**2 for (age, neighbors_age) in agepairs] # RMSE
+    #return np.sqrt(np.mean(agediffs))
 
-def hyphothesis(v1_values, v2_values):
-  return True
+  pm_neg = {}
+  pm_pos = {}
+  segments = ['00', '01', '11', '10']
+  for segment in segments:
 
-def main(tries):
+    # trains a nearest neighbour model using data from Tr_healthy (only healthy individuals)
+    # xxx brute force
+    model = NearestNeighbors(n_neighbors = n_neighbors, algorithm = 'brute', metric = 'minkowski', p = 2)
+    X = Tr_healthy[predVars].loc[(Tr_healthy.segment == segment)].to_numpy()
+    y = Tr_healthy[outcome ].loc[(Tr_healthy.segment == segment)].to_numpy()
+    model.fit(X)
 
-  print('Loading and preprocessing the ELSA dataset.')
-  dataset = load_ELSA()
-  #print(dataset.info())
+    # evaluates the performance metric of age prediction for healthy individuals
+    Xneg = Te_healthy[predVars].loc[(Te_healthy.segment == segment)].to_numpy()
+    yneg = Te_healthy[outcome ].loc[(Te_healthy.segment == segment)].to_numpy()
+    (nrows, _) = Xneg.shape
+    agepairs = []
+    for i in range(nrows):
+      neighbors = model.kneighbors(Xneg[i].reshape(1, -1), return_distance=False)
+      agepairs.append((yneg[i], y[neighbors].mean()))
+    pm_neg[segment] = pm(agepairs)
 
-  print('Splitting the dataset into training and test partitions')
-  (Tr_healthy, Te_healthy, Te_unhealthy) = split(dataset)
-  print('-- number of CKD+ individuals: {0}'.format(len(Te_unhealthy)))
-  print('-- number of CKD- individuals: {0}'.format(len(Tr_healthy)+len(Te_healthy)))
-  print('-- Test partition comprises {0} healthy and {1} unhealthy individuals'.format(len(Te_healthy), len(Te_unhealthy)))
+    # evaluates the performance metric of age prediction for unhealthy individuals
+    Xpos = Te_unhealthy[predVars].loc[(Te_unhealthy.segment == segment)].to_numpy()
+    ypos = Te_unhealthy[outcome ].loc[(Te_unhealthy.segment == segment)].to_numpy()
+    (nrows, _) = Xpos.shape
+    agepairs = []
+    for i in range(nrows):
+      neighbors = model.kneighbors(Xpos[i].reshape(1, -1), return_distance=False)
+      agepairs.append((ypos[i], y[neighbors].mean()))
+    pm_pos[segment] = pm(agepairs)
 
-  #
-  params = (['eDCE', 'SCr', 'Gender', 'Race'], 'Age', 3)
-  v1_values = []
-  v2_values = []
+  return (pm_neg, pm_pos)
+
+def assess_hyphothesis(pm_neg_segs, pm_pos_segs, tries):
+
+  def overlap(ci1, ci2):
+    (lb1, ub1) = (ci1.low, ci1.high)
+    (lb2, ub2) = (ci2.low, ci2.high)
+    return max(lb1, lb2) > min(ub1, ub2)
+
+  pm_neg_values = defaultdict(list)
+  pm_pos_values = defaultdict(list)
+  segments = []
   for i in range(tries):
-    (v1, v2) = doit(Tr_healthy, Te_healthy, Te_unhealthy, params)
-    v1_values.append(v1)
-    v2_values.append(v2)
+    for segment in pm_neg_segs[i]:
+      segments.append(segment)
+      pm_neg_values[segment].append(pm_neg_segs[i][segment])
+      pm_pos_values[segment].append(pm_pos_segs[i][segment])
+
+  segments = list(set(segments))
+  responses = []
+  cis_pm_neg = []
+  cis_pm_pos = []
+  for segment in segments:
+    ci_pm_neg = bootstrap([pm_neg_values[segment],], np.mean).confidence_interval
+    ci_pm_pos = bootstrap([pm_pos_values[segment],], np.mean).confidence_interval
+    hypothesis = overlap(ci_pm_neg, ci_pm_pos)
+    if(hypothesis):
+      res = '*** Segment {0}: Yes, the hypothesis has been supported by the obtained results: CKD- [{1:4.1f}, {2:4.1f}], CKD+ [{3:4.1f}, {4:4.1f}]'.format(segment, ci_pm_neg.low, ci_pm_neg.high, ci_pm_pos.low, ci_pm_pos.high)
+    else:
+      res = '*** Segment {0}: No, the hypothesis has NOT been supported by the obtained results: CKD- [{1:4.1f}, {2:4.1f}], CKD+ [{3:4.1f}, {4:4.1f}]'.format(segment, ci_pm_neg.low, ci_pm_neg.high, ci_pm_pos.low, ci_pm_pos.high)
+    responses.append(res)
+    cis_pm_neg.append(ci_pm_neg)
+    cis_pm_pos.append(ci_pm_pos)
+
+  return responses, cis_pm_neg, cis_pm_pos
+
+def main(n_neighbors, tries):
+
+  ECO_SEED = 20
+  np.random.seed(ECO_SEED)
+
+  if exists('ELSA.pkl'):
+    print('Loading the preprocessed ELSA dataset')
+    ds = deserialise('ELSA')
+  else:
+    print('Loading and preprocessing the ELSA dataset')
+    ds = load_ELSA()
+    serialise(ds, 'ELSA')
+  #print(ds.info())
+
+  num_of_ckdpos = len(ds.loc[(ds['hasCKD'] >  0)])
+  num_of_ckdneg = len(ds.loc[(ds['hasCKD'] == 0)])
+  print('-- number of CKD+ individuals: {0}'.format(num_of_ckdpos))
+  print('-- number of CKD- individuals: {0}'.format(num_of_ckdneg))
+
+  print('Learning and assessing the model of renal age')
+  predVars = ['eDCE', 'SCr', 'Gender', 'Race']
+  outcome  = 'Age'
+  params = (predVars, outcome, n_neighbors)
+  pm_neg_segs = []
+  pm_pos_segs = []
+  for i in range(tries):
+    print('-- iteration {0:2d}'.format(i+1))
+    (Tr_healthy, Te_healthy, Te_unhealthy) = split(ds)
+    (pm_neg, pm_pos) = doit(Tr_healthy, Te_healthy, Te_unhealthy, params)
+    pm_neg_segs.append(pm_neg)
+    pm_pos_segs.append(pm_pos)
 
   # checks if the hypothesis is supported by the obtained results
-  if(hyphothesis(v1_values, v2_values)):
-    print('*** Yes, the hypothesis has been supported by the obtained results')
-  else:
-    print('*** No, the hypothesis has NOT been supported by the obtained results')
+  print('Assessing the hypothesis')
+  responses, cis_pm_neg, cis_pm_pos = assess_hyphothesis(pm_neg_segs, pm_pos_segs, tries)
+  for res in responses:
+    print(res)
 
 if(__name__ == '__main__'):
 
-  tries = int(sys.argv[1])
-  main(tries)
+  n_neighbors = int(sys.argv[1])
+  tries = int(sys.argv[2])
+  main(n_neighbors, tries)
