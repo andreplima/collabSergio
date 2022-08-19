@@ -149,9 +149,9 @@ def load_ELSA():
   ds['eBSA']   = ds.apply(lambda row: estimate_BSA(row.height, row.weight),  axis=1)
   ds['hasCKD'] = ds.apply(lambda row: hasCKD(row.eGFR, row.eACR, row.hasDM, row.hasHTN, row.hadCS, row.hadCVA, row.hadMI), axis=1)
 
-
   # segments the dataset in gender and race groups
-  ds['segment'] = ds.apply(lambda row: '{0}{1}'.format(row.Gender, row.Race), axis=1)
+  #ds['segment'] = ds.apply(lambda row: '{0}{1}'.format(row.Gender, row.Race), axis=1)
+  ds['segment'] = ds.apply(lambda row: '{0}{1}{2}'.format(row.Gender, row.Race, 1 if (row.hasDM + row.hasHTN + row.hadCS + row.hadCVA + row.hadMI) > 0 else 0), axis=1)
 
   #xxx normalise features?
 
@@ -180,7 +180,7 @@ def doit(Tr_healthy, Te_healthy, Te_unhealthy, params):
     """
     performance metric
     """
-    print(agepairs[0:3])
+    #print(agepairs[0:3])
     agediffs = [(age - neighbors_age) for (age, neighbors_age) in agepairs]    # bias
     #agediffs = [abs(age - neighbors_age) for (age, neighbors_age) in agepairs] # MAE
     return np.mean(agediffs)
@@ -190,12 +190,13 @@ def doit(Tr_healthy, Te_healthy, Te_unhealthy, params):
 
   pm_neg = {}
   pm_pos = {}
-  segments = ['00', '01', '11', '10']
-  for segment in segments:
+  partsizes = defaultdict(dict)
+  segments = Tr_healthy['segment'].unique()
+  for segment in sorted(segments):
+    #print('-- segment {0}'.format(segment))
 
     # trains a nearest neighbour model using data from Tr_healthy (only healthy individuals)
-    # xxx brute force
-    model = NearestNeighbors(n_neighbors = n_neighbors, algorithm = 'brute', metric = 'minkowski', p = 2)
+    model = NearestNeighbors(n_neighbors = n_neighbors, algorithm = 'auto', metric = 'minkowski', p = 2)
     X = Tr_healthy[predVars].loc[(Tr_healthy.segment == segment)].to_numpy()
     y = Tr_healthy[outcome ].loc[(Tr_healthy.segment == segment)].to_numpy()
     model.fit(X)
@@ -204,6 +205,7 @@ def doit(Tr_healthy, Te_healthy, Te_unhealthy, params):
     Xneg = Te_healthy[predVars].loc[(Te_healthy.segment == segment)].to_numpy()
     yneg = Te_healthy[outcome ].loc[(Te_healthy.segment == segment)].to_numpy()
     (nrows, _) = Xneg.shape
+    partsizes['ckd-'][segment] = nrows
     agepairs = []
     for i in range(nrows):
       neighbors = model.kneighbors(Xneg[i].reshape(1, -1), return_distance=False)
@@ -214,20 +216,21 @@ def doit(Tr_healthy, Te_healthy, Te_unhealthy, params):
     Xpos = Te_unhealthy[predVars].loc[(Te_unhealthy.segment == segment)].to_numpy()
     ypos = Te_unhealthy[outcome ].loc[(Te_unhealthy.segment == segment)].to_numpy()
     (nrows, _) = Xpos.shape
+    partsizes['ckd+'][segment] = nrows
     agepairs = []
     for i in range(nrows):
       neighbors = model.kneighbors(Xpos[i].reshape(1, -1), return_distance=False)
       agepairs.append((ypos[i], y[neighbors].mean()))
     pm_pos[segment] = pm(agepairs)
 
-  return (pm_neg, pm_pos)
+  return (pm_neg, pm_pos, partsizes)
 
-def assess_hyphothesis(pm_neg_segs, pm_pos_segs, tries):
+def assess_hyphothesis(pm_neg_segs, pm_pos_segs, tries, partsizes):
 
   def overlap(ci1, ci2):
     (lb1, ub1) = (ci1.low, ci1.high)
     (lb2, ub2) = (ci2.low, ci2.high)
-    return max(lb1, lb2) > min(ub1, ub2)
+    return max(lb1, lb2) <= min(ub1, ub2)
 
   pm_neg_values = defaultdict(list)
   pm_pos_values = defaultdict(list)
@@ -238,18 +241,25 @@ def assess_hyphothesis(pm_neg_segs, pm_pos_segs, tries):
       pm_neg_values[segment].append(pm_neg_segs[i][segment])
       pm_pos_values[segment].append(pm_pos_segs[i][segment])
 
-  segments = list(set(segments))
+  segments = sorted(set(segments))
   responses = []
   cis_pm_neg = []
   cis_pm_pos = []
   for segment in segments:
     ci_pm_neg = bootstrap([pm_neg_values[segment],], np.mean).confidence_interval
     ci_pm_pos = bootstrap([pm_pos_values[segment],], np.mean).confidence_interval
-    hypothesis = overlap(ci_pm_neg, ci_pm_pos)
+    #hypothesis = not overlap(ci_pm_neg, ci_pm_pos)
+    hypothesis = ci_pm_neg.high < ci_pm_pos.low
+    complement = 'CKD- [{0:4.1f}, {1:4.1f}] #{2:4d}, CKD+ [{3:4.1f}, {4:4.1f}] #{5:4d}'.format(
+                       ci_pm_neg.low, ci_pm_neg.high, partsizes['ckd-'][segment],
+                       ci_pm_pos.low, ci_pm_pos.high, partsizes['ckd+'][segment])
     if(hypothesis):
-      res = '*** Segment {0}: Yes, the hypothesis has been supported by the obtained results: CKD- [{1:4.1f}, {2:4.1f}], CKD+ [{3:4.1f}, {4:4.1f}]'.format(segment, ci_pm_neg.low, ci_pm_neg.high, ci_pm_pos.low, ci_pm_pos.high)
+      res = '*** Segment {0}: Yes, the hypothesis is supported by the results: {1}'.format(segment, complement)
+
     else:
-      res = '*** Segment {0}: No, the hypothesis has NOT been supported by the obtained results: CKD- [{1:4.1f}, {2:4.1f}], CKD+ [{3:4.1f}, {4:4.1f}]'.format(segment, ci_pm_neg.low, ci_pm_neg.high, ci_pm_pos.low, ci_pm_pos.high)
+      res = '*** Segment {0}: No, the hypothesis is NOT supported by the results: {1}'.format(segment, complement)
+      #res = '*** Segment {0}: No, the hypothesis is NOT supported by the results: CKD- [{1:4.1f}, {2:4.1f}] #{5:4d}, CKD+ [{3:4.1f}, {4:4.1f}] #{6}'.format(segment, ci_pm_neg.low, ci_pm_neg.high, ci_pm_pos.low, ci_pm_pos.high, partsizes['ckd-'][segment], partsizes['ckd+]'[segment])
+      #res = '*** Segment {0}: No, the hypothesis is NOT supported by the results: CKD- [{1:4.1f}, {2:4.1f}], CKD+ [{3:4.1f}, {4:4.1f}], {5} samples'.format(segment, ci_pm_neg.low, ci_pm_neg.high, ci_pm_pos.low, ci_pm_pos.high)
     responses.append(res)
     cis_pm_neg.append(ci_pm_neg)
     cis_pm_pos.append(ci_pm_pos)
@@ -261,6 +271,7 @@ def main(n_neighbors, tries):
   ECO_SEED = 20
   np.random.seed(ECO_SEED)
 
+  # xxx try also # https://www.pns.icict.fiocruz.br/bases-de-dados/
   if exists('ELSA.pkl'):
     print('Loading the preprocessed ELSA dataset')
     ds = deserialise('ELSA')
@@ -268,7 +279,7 @@ def main(n_neighbors, tries):
     print('Loading and preprocessing the ELSA dataset')
     ds = load_ELSA()
     serialise(ds, 'ELSA')
-  #print(ds.info())
+  print(ds.info())
 
   num_of_ckdpos = len(ds.loc[(ds['hasCKD'] >  0)])
   num_of_ckdneg = len(ds.loc[(ds['hasCKD'] == 0)])
@@ -276,7 +287,8 @@ def main(n_neighbors, tries):
   print('-- number of CKD- individuals: {0}'.format(num_of_ckdneg))
 
   print('Learning and assessing the model of renal age')
-  predVars = ['eDCE', 'SCr', 'Gender', 'Race']
+  #predVars = ['eDCE', 'SCr', 'eACR', 'height', 'weight']
+  predVars = ['height', 'weight', 'SCr']
   outcome  = 'Age'
   params = (predVars, outcome, n_neighbors)
   pm_neg_segs = []
@@ -284,13 +296,13 @@ def main(n_neighbors, tries):
   for i in range(tries):
     print('-- iteration {0:2d}'.format(i+1))
     (Tr_healthy, Te_healthy, Te_unhealthy) = split(ds)
-    (pm_neg, pm_pos) = doit(Tr_healthy, Te_healthy, Te_unhealthy, params)
+    (pm_neg, pm_pos, partsizes) = doit(Tr_healthy, Te_healthy, Te_unhealthy, params)
     pm_neg_segs.append(pm_neg)
     pm_pos_segs.append(pm_pos)
 
   # checks if the hypothesis is supported by the obtained results
   print('Assessing the hypothesis')
-  responses, cis_pm_neg, cis_pm_pos = assess_hyphothesis(pm_neg_segs, pm_pos_segs, tries)
+  (responses, _, _) = assess_hyphothesis(pm_neg_segs, pm_pos_segs, tries, partsizes)
   for res in responses:
     print(res)
 
