@@ -1,3 +1,4 @@
+# next task - make loaders as similar as possible
 import sys
 import numpy as np
 import pandas as pd
@@ -5,21 +6,10 @@ import pandas as pd
 from os.path     import exists
 from collections import defaultdict
 from scipy.stats import bootstrap
-from sharedDefs  import serialise, deserialise
 from sklearn.neighbors import NearestNeighbors
 
 import warnings
 warnings.filterwarnings('error')
-
-def encodeGender(gender):
-  if(gender not in ['Feminino', 'Masculino']):
-    return np.nan
-  return 1 if gender == 'Feminino' else 0
-
-def encodeRace(race):
-  if(race not in ['Branco', 'Amarelo', 'Indigena', 'Pardo', 'Preta']):
-    return np.nan
-  return 1 if race != 'Branco' else 0
 
 def estimate_GFR_CKDEPI(scr, age, gender, race):
   """
@@ -86,7 +76,7 @@ def estimate_ACR(ualb, udur, ucr, uvol):
 def estimate_BSA(height, weight):
   # parameters:
   #   height é a altura, em cm
-  #   weight é o peso em kG
+  #   weight é o peso em Kg
   bsa = 0.007184 * weight ** 0.425 * height ** 0.725
   return bsa
 
@@ -102,7 +92,84 @@ def hasCKD(eGFR, eACR, hasDM, hasHTN, hadCS, hadCVA, hadMI):
     result = 0
   return result
 
+def load_PNS2013lab():
+  # https://www.pns.icict.fiocruz.br/bases-de-dados/
+
+  def encodeGender(gender):
+    # converts
+    # 1 Masculino; 2 Feminino
+    # to
+    # 0 Masculino; 1 Feminino
+    if(gender not in [1, 2]):
+      return np.nan
+    return 1 if gender == 2 else 0
+
+  def encodeRace(race):
+    # converts
+    # 1 Branca; 2 Preta; 3 Amarela; 4 Parda; 5 Indígena
+    # to
+    # 0 Branco; 1 Nao-branco
+    if(race not in [1, 2, 3, 4, 5]):
+      return np.nan
+    return 1 if race != 1 else 0
+
+  #
+  ds = pd.read_csv('../../datasets/PNS_2013.tsv', sep='\t', decimal='.')
+
+  keepcolumns = ['Z001', 'Z002', 'Z003', 'Z004', 'Z005', 'Z025', 'Z048',
+                 'F012', 'W00303',
+                 'regiao', 'peso_lab']
+  ds.drop(ds.columns.difference(keepcolumns), axis=1, inplace=True)
+
+  # ajusta valores de algumas colunas (converte para número ou nan)
+  for field in keepcolumns:
+    ds[field] = pd.to_numeric(ds[field], errors='coerce')
+
+  # remove linhas com dados inválidos (descarte)
+  ds.dropna(inplace = True)
+
+  #
+  ds.rename(columns={'Z001':   'Gender',
+                     'Z002':   'Age',
+                     'Z003':   'Race',
+                     'Z004':   'weight',
+                     'Z005':   'height',
+                     'Z025':   'SCr',
+                     'Z048':   'UCr',
+                     'F012':   'BolsaFam',
+                     'W00303': 'waist',
+                    }, inplace=True)
+
+  # ajusta valores de algumas colunas (troca tipo de dados)
+  for field in ['regiao']:
+    ds[field] = ds[field].astype(int)
+  ds['Gender'] = ds.apply(lambda row: encodeGender(row.Gender), axis=1)
+  ds['Race']   = ds.apply(lambda row: encodeRace(row.Race),     axis=1)
+
+  # estende o dataset para incluir novas colunas
+  ds['ID'] = ds.index
+  ds['eGFR']   = ds.apply(lambda row: estimate_GFR_CKDEPI(row.SCr, row.Age, row.Gender, row.Race), axis=1)
+  ds['eBSA']   = ds.apply(lambda row: estimate_BSA(row.height, row.weight),  axis=1)
+  #ds['hasCKD'] = ds.apply(lambda row: hasCKD(row.eGFR, 0.0, row.hasDM, row.hasHTN, row.hadCS, row.hadCVA, row.hadMI), axis=1)
+  ds['hasCKD'] = ds.apply(lambda row: hasCKD(row.eGFR, 0.0, 0, 0, 0, 0, 0), axis=1)
+
+  # segments the dataset in gender and race groups
+  ds['segment'] = ds.apply(lambda row: '{0}{1}'.format(row.Gender, row.Race), axis=1)
+  #ds['segment'] = ds.apply(lambda row: '{0}{1}{2}'.format(row.Gender, row.Race, 1 if (row.hasDM + row.hasHTN + row.hadCS + row.hadCVA + row.hadMI) > 0 else 0), axis=1)
+
+  return ds
+
 def load_ELSA():
+
+  def encodeGender(gender):
+    if(gender not in ['Feminino', 'Masculino']):
+      return np.nan
+    return 1 if gender == 'Feminino' else 0
+
+  def encodeRace(race):
+    if(race not in ['Branco', 'Amarelo', 'Indigena', 'Pardo', 'Preta']):
+      return np.nan
+    return 1 if race != 'Branco' else 0
 
   #
   ds = pd.read_csv('../../datasets/DATASETELSA.tsv', sep='\t', decimal='.')
@@ -111,10 +178,12 @@ def load_ELSA():
   ds.drop(columns=['Codigo Sexo',
                    'Acido_urico', 'Colesterol', 'TG', 'HDL', 'LDL', 'TG_HDL',
                    'Sodio_sangue', 'Sodio_Ur', 'K_Ur','Sódio_24h',
-                   'Potassio_24h', 'Febre reumática'], inplace = True)
+                   'Potassio_24h', 'Febre reumática', 'Microalbinuria_mcgmin.1',
+                   'Creatinina por kg/dia'], inplace = True)
 
   #
-  ds.rename(columns={'Creatinina_sangue': 'SCr',
+  ds.rename(columns={'IDElsa': 'ID',
+                     'Creatinina_sangue': 'SCr',
                      'Microalbinuria_mcgmin': 'UAlb',
                      'Cr_Ur': 'UCr',
                      'Tempo_Ur': 'UDur',
@@ -153,21 +222,21 @@ def load_ELSA():
   ds['hasCKD'] = ds.apply(lambda row: hasCKD(row.eGFR, row.eACR, row.hasDM, row.hasHTN, row.hadCS, row.hadCVA, row.hadMI), axis=1)
 
   # segments the dataset in gender and race groups
-  #ds['segment'] = ds.apply(lambda row: '{0}{1}'.format(row.Gender, row.Race), axis=1)
-  ds['segment'] = ds.apply(lambda row: '{0}{1}{2}'.format(row.Gender, row.Race, 1 if (row.hasDM + row.hasHTN + row.hadCS + row.hadCVA + row.hadMI) > 0 else 0), axis=1)
+  ds['segment'] = ds.apply(lambda row: '{0}{1}'.format(row.Gender, row.Race), axis=1)
+  #ds['segment'] = ds.apply(lambda row: '{0}{1}{2}'.format(row.Gender, row.Race, 1 if (row.hasDM + row.hasHTN + row.hadCS + row.hadCVA + row.hadMI) > 0 else 0), axis=1)
 
   return ds
 
 def split(ds):
 
-  healthy = ds.loc[(ds['hasCKD'] == 0)]['IDElsa'].tolist()
+  healthy = ds.loc[(ds['hasCKD'] == 0)]['ID'].tolist()
   np.random.shuffle(healthy)
   num_of_ckdpos = len(ds.loc[(ds['hasCKD'] > 0)])
   healthy_te = healthy[:num_of_ckdpos]
   healthy_tr = healthy[num_of_ckdpos:]
 
-  Tr_healthy   = ds.loc[(ds['IDElsa'].isin(healthy_tr))]
-  Te_healthy   = ds.loc[(ds['IDElsa'].isin(healthy_te))]
+  Tr_healthy   = ds.loc[(ds['ID'].isin(healthy_tr))]
+  Te_healthy   = ds.loc[(ds['ID'].isin(healthy_te))]
   Te_unhealthy = ds.loc[(ds['hasCKD'] > 0)]
 
   return (Tr_healthy, Te_healthy, Te_unhealthy)
@@ -240,11 +309,6 @@ def doit(Tr_healthy, Te_healthy, Te_unhealthy, params):
 
 def assess_hyphothesis(pm_neg_segs, pm_pos_segs, tries, partsizes):
 
-  def overlap(ci1, ci2):
-    (lb1, ub1) = (ci1.low, ci1.high)
-    (lb2, ub2) = (ci2.low, ci2.high)
-    return max(lb1, lb2) <= min(ub1, ub2)
-
   pm_neg_values = defaultdict(list)
   pm_pos_values = defaultdict(list)
   segments = []
@@ -259,9 +323,11 @@ def assess_hyphothesis(pm_neg_segs, pm_pos_segs, tries, partsizes):
   cis_pm_neg = []
   cis_pm_pos = []
   for segment in segments:
-    ci_pm_neg = bootstrap([pm_neg_values[segment],], np.mean).confidence_interval
-    ci_pm_pos = bootstrap([pm_pos_values[segment],], np.mean).confidence_interval
-    #hypothesis = not overlap(ci_pm_neg, ci_pm_pos)
+    try:
+      ci_pm_neg = bootstrap([pm_neg_values[segment],], np.mean).confidence_interval
+      ci_pm_pos = bootstrap([pm_pos_values[segment],], np.mean).confidence_interval
+    except RuntimeWarning:
+      breakpoint()
     hypothesis = ci_pm_neg.high < ci_pm_pos.low
     complement = 'CKD- [{0:4.1f}, {1:4.1f}] #{2:4d}, CKD+ [{3:4.1f}, {4:4.1f}] #{5:4d}'.format(
                        ci_pm_neg.low, ci_pm_neg.high, partsizes['ckd-'][segment],
@@ -271,27 +337,23 @@ def assess_hyphothesis(pm_neg_segs, pm_pos_segs, tries, partsizes):
 
     else:
       res = '*** Segment {0}: No, the hypothesis is NOT supported by the results: {1}'.format(segment, complement)
-      #res = '*** Segment {0}: No, the hypothesis is NOT supported by the results: CKD- [{1:4.1f}, {2:4.1f}] #{5:4d}, CKD+ [{3:4.1f}, {4:4.1f}] #{6}'.format(segment, ci_pm_neg.low, ci_pm_neg.high, ci_pm_pos.low, ci_pm_pos.high, partsizes['ckd-'][segment], partsizes['ckd+]'[segment])
-      #res = '*** Segment {0}: No, the hypothesis is NOT supported by the results: CKD- [{1:4.1f}, {2:4.1f}], CKD+ [{3:4.1f}, {4:4.1f}], {5} samples'.format(segment, ci_pm_neg.low, ci_pm_neg.high, ci_pm_pos.low, ci_pm_pos.high)
     responses.append(res)
     cis_pm_neg.append(ci_pm_neg)
     cis_pm_pos.append(ci_pm_pos)
 
   return responses, cis_pm_neg, cis_pm_pos
 
-def main(n_neighbors, tries):
+def main(dataset, n_neighbors, tries):
 
   ECO_SEED = 20
   np.random.seed(ECO_SEED)
 
-  # xxx try also # https://www.pns.icict.fiocruz.br/bases-de-dados/
-  if exists('ELSA.pkl'):
-    print('Loading the preprocessed ELSA dataset')
-    ds = deserialise('ELSA')
-  else:
-    print('Loading and preprocessing the ELSA dataset')
+  if dataset.lower() == 'elsa':
+    print('Loading and preprocessing the PNS 2013 lab exams dataset')
     ds = load_ELSA()
-    serialise(ds, 'ELSA')
+  elif(dataset.lower() == 'pns'):
+    print('Loading and preprocessing the ELSA dataset')
+    ds = load_PNS2013lab()
   print(ds.info())
 
   num_of_ckdpos = len(ds.loc[(ds['hasCKD'] >  0)])
@@ -321,6 +383,7 @@ def main(n_neighbors, tries):
 
 if(__name__ == '__main__'):
 
-  n_neighbors = int(sys.argv[1])
-  tries = int(sys.argv[2])
-  main(n_neighbors, tries)
+  dataset = sys.argv[1]
+  n_neighbors = int(sys.argv[2])
+  tries = int(sys.argv[3])
+  main(dataset, n_neighbors, tries)
