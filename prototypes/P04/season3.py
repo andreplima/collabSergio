@@ -93,7 +93,6 @@ def hasCKD(eGFR, eACR, hasDM, hasHTN, hadCS, hadCVA, hadMI):
   return result
 
 def load_PNS2013lab():
-  # https://www.pns.icict.fiocruz.br/bases-de-dados/
 
   def encodeGender(gender):
     # converts
@@ -113,22 +112,18 @@ def load_PNS2013lab():
       return np.nan
     return 1 if race != 1 else 0
 
-  #
+  # loads the dataset content from a tab-separated file
+  # (content obtained from https://www.pns.icict.fiocruz.br/bases-de-dados/, click on "Exames" button)
   ds = pd.read_csv('../../datasets/PNS_2013.tsv', sep='\t', decimal='.')
 
+  # discards columns that will not be used
   keepcolumns = ['Z001', 'Z002', 'Z003', 'Z004', 'Z005', 'Z025', 'Z048',
-                 'F012', 'W00303',
-                 'regiao', 'peso_lab']
+                 'Q030', 'Q002', 'Q063', 'Q068', 'Q066',
+                 'F012', 'W00303', 'regiao', 'peso_lab',
+                 ]
   ds.drop(ds.columns.difference(keepcolumns), axis=1, inplace=True)
 
-  # ajusta valores de algumas colunas (converte para número ou nan)
-  for field in keepcolumns:
-    ds[field] = pd.to_numeric(ds[field], errors='coerce')
-
-  # remove linhas com dados inválidos (descarte)
-  ds.dropna(inplace = True)
-
-  #
+  # renames columns to friendlier labels
   ds.rename(columns={'Z001':   'Gender',
                      'Z002':   'Age',
                      'Z003':   'Race',
@@ -136,25 +131,45 @@ def load_PNS2013lab():
                      'Z005':   'height',
                      'Z025':   'SCr',
                      'Z048':   'UCr',
+                     'Q030':   'hasDM',
+                     'Q002':   'hasHTN',
+                     'Q063':   'hadMI',
+                     'Q068':   'hadCVA',
+                     'Q066':   'hadCS',
                      'F012':   'BolsaFam',
                      'W00303': 'waist',
                     }, inplace=True)
 
-  # ajusta valores de algumas colunas (troca tipo de dados)
-  for field in ['regiao']:
-    ds[field] = ds[field].astype(int)
+  # recodes some columns to be compatible with the scheme in MDRD/CKD-EPI models,
+  # (and, incidentally, identifies rows to be discarded because of invalid values)
   ds['Gender'] = ds.apply(lambda row: encodeGender(row.Gender), axis=1)
   ds['Race']   = ds.apply(lambda row: encodeRace(row.Race),     axis=1)
+  ds['hasDM']  = ds.apply(lambda row: 1 if row.hasDM  == 1 else 0, axis=1)
+  ds['hasHTN'] = ds.apply(lambda row: 1 if row.hasHTN == 1 else 0, axis=1)
+  ds['hadMI']  = ds.apply(lambda row: 1 if row.hasDM  == 1 else 0, axis=1)
+  ds['hadCVA'] = ds.apply(lambda row: 1 if row.hasHTN == 1 else 0, axis=1)
+  ds['hadCS']  = ds.apply(lambda row: 1 if row.hasHTN == 1 else 0, axis=1)
 
-  # estende o dataset para incluir novas colunas
-  ds['ID'] = ds.index
+  # identifies rows to be discarded (e.g., because of invalid values)
+  for field in ['Age', 'BolsaFam', 'regiao']:
+    ds[field] = pd.to_numeric(ds[field], errors='coerce', downcast = 'integer')
+  for field in ['weight', 'height', 'SCr', 'UCr', 'waist', 'peso_lab']:
+    ds[field] = pd.to_numeric(ds[field], errors='coerce', downcast = 'float')
+  ds.dropna(inplace = True)
+
+  # xxx recasts some columns to other data types
+  for field in ['regiao', 'Gender', 'Race', 'Age']:
+    ds[field] = ds[field].astype(int)
+
+  # extends the dataset with new derived columns
+  ds['ID']     = ds.index
   ds['eGFR']   = ds.apply(lambda row: estimate_GFR_CKDEPI(row.SCr, row.Age, row.Gender, row.Race), axis=1)
   ds['eBSA']   = ds.apply(lambda row: estimate_BSA(row.height, row.weight),  axis=1)
-  #ds['hasCKD'] = ds.apply(lambda row: hasCKD(row.eGFR, 0.0, row.hasDM, row.hasHTN, row.hadCS, row.hadCVA, row.hadMI), axis=1)
-  ds['hasCKD'] = ds.apply(lambda row: hasCKD(row.eGFR, 0.0, 0, 0, 0, 0, 0), axis=1)
+  ds['hasCKD'] = ds.apply(lambda row: hasCKD(row.eGFR, 0.0, row.hasDM, row.hasHTN, row.hadCS, row.hadCVA, row.hadMI), axis=1)
+  #ds['hasCKD'] = ds.apply(lambda row: hasCKD(row.eGFR, 0.0, 0, 0, 0, 0, 0), axis=1)
 
-  # segments the dataset in gender and race groups
-  ds['segment'] = ds.apply(lambda row: '{0}{1}'.format(row.Gender, row.Race), axis=1)
+  # segments the dataset into groups on which the analysis is based
+  ds['segment'] = ds.apply(lambda row: '{0}{1}'.format(int(row.Gender), int(row.Race)), axis=1)
   #ds['segment'] = ds.apply(lambda row: '{0}{1}{2}'.format(row.Gender, row.Race, 1 if (row.hasDM + row.hasHTN + row.hadCS + row.hadCVA + row.hadMI) > 0 else 0), axis=1)
 
   return ds
@@ -171,57 +186,60 @@ def load_ELSA():
       return np.nan
     return 1 if race != 'Branco' else 0
 
-  #
+  # loads the dataset content from a tab-separated file
+  # (content is a sample of the ELSA Wave 2 dataset, obtained from researchers in the project)
   ds = pd.read_csv('../../datasets/DATASETELSA.tsv', sep='\t', decimal='.')
 
-  #
-  ds.drop(columns=['Codigo Sexo',
-                   'Acido_urico', 'Colesterol', 'TG', 'HDL', 'LDL', 'TG_HDL',
-                   'Sodio_sangue', 'Sodio_Ur', 'K_Ur','Sódio_24h',
-                   'Potassio_24h', 'Febre reumática', 'Microalbinuria_mcgmin.1',
-                   'Creatinina por kg/dia'], inplace = True)
+  # discards columns that will not be used
+  keepcolumns = ['IDElsa', 'Idade', 'Sexo', 'Raca_Cor', 'Estatura', 'Peso',
+                 'Creatinina_sangue', 'Cr_Ur', 'Microalbinuria_mcgmin', 'Vol_Ur', 'Tempo_Ur',
+                 'Diabetes', 'Hipertensao', 'Infarto', 'AVC', 'Cirurgia Cardiaca', ]
+  ds.drop(ds.columns.difference(keepcolumns), axis=1, inplace=True)
 
-  #
+  # renames columns to friendlier labels
   ds.rename(columns={'IDElsa': 'ID',
-                     'Creatinina_sangue': 'SCr',
-                     'Microalbinuria_mcgmin': 'UAlb',
-                     'Cr_Ur': 'UCr',
-                     'Tempo_Ur': 'UDur',
-                     'Vol_Ur': 'UVol',
                      'Idade': 'Age',
+                     'Estatura': 'height',
+                     'Peso': 'weight',
                      'Diabetes': 'hasDM',
                      'Hipertensao': 'hasHTN',
-                     'Cirurgia Cardiaca': 'hadCS',
-                     'AVC': 'hadCVA',
+                     'Creatinina_sangue': 'SCr',
+                     'Cr_Ur': 'UCr',
+                     'Microalbinuria_mcgmin': 'UAlb',
+                     'Vol_Ur': 'UVol',
+                     'Tempo_Ur': 'UDur',
                      'Infarto': 'hadMI',
-                     'Estatura': 'height',
-                     'Peso': 'weight'}, inplace=True)
+                     'AVC': 'hadCVA',
+                     'Cirurgia Cardiaca': 'hadCS',
+                    }, inplace=True)
 
-  # ajusta valores de algumas colunas (converte para número ou nan)
-  for field in ['UAlb', 'hadCS', 'hadCVA', 'hadMI', 'height', 'weight']:
-    ds[field] = pd.to_numeric(ds[field], errors='coerce')
-
-  ds['hasDM']  = ds.apply(lambda row: 0 if row.hasDM  == 'Nao' else 1, axis=1)
-  ds['hasHTN'] = ds.apply(lambda row: 0 if row.hasHTN == 'Nao' else 1, axis=1)
+  # recodes some columns to be compatible with the scheme in MDRD/CKD-EPI models,
+  # (and, incidentally, identifies rows to be discarded because of invalid values)
   ds['Gender'] = ds.apply(lambda row: encodeGender(row.Sexo),   axis=1)
   ds['Race']   = ds.apply(lambda row: encodeRace(row.Raca_Cor), axis=1)
-  ds.drop(columns=['Sexo','Raca_Cor'], inplace = True)
+  ds.drop(columns=['Sexo','Raca_Cor'], inplace=True)
+  ds['hasDM']  = ds.apply(lambda row: 1 if row.hasDM  == 'Sim' else 0, axis=1)
+  ds['hasHTN'] = ds.apply(lambda row: 1 if row.hasHTN == 'Sim' else 0, axis=1)
 
-  # remove linhas com dados inválidos (descarte)
+  # identifies rows to be discarded (e.g., because of invalid values)
+  for field in ['Age', 'hasDM', 'hasHTN', 'UCr', 'UVol', 'UDur', 'hadMI', 'hadCVA', 'hadCS']:
+    ds[field] = pd.to_numeric(ds[field], errors='coerce', downcast = 'integer')
+  for field in ['height', 'weight', 'SCr', 'UAlb']:
+    ds[field] = pd.to_numeric(ds[field], errors='coerce', downcast = 'float')
   ds.dropna(inplace = True)
 
-  # ajusta valores de algumas colunas (troca tipo de dados)
-  for field in ['hasDM', 'hasHTN', 'hadCS', 'hadCVA', 'hadMI', 'Gender', 'Race']:
+  # recasts some columns to appropriate data types
+  for field in ['hadCS', 'hadCVA', 'hadMI', 'Gender', 'Race']:
     ds[field] = ds[field].astype(int)
 
-  # estende o dataset para incluir novas colunas
+  # extends the dataset with new derived columns
   ds['eGFR']   = ds.apply(lambda row: estimate_GFR_CKDEPI(row.SCr, row.Age, row.Gender, row.Race), axis=1)
   ds['eDCE']   = ds.apply(lambda row: estimate_GFR_DCE(row.UCr, row.SCr, row.UVol, row.UDur, row.height, row.weight), axis=1)
   ds['eACR']   = ds.apply(lambda row: estimate_ACR(row.UAlb, row.UDur, row.UCr, row.UVol),  axis=1)
   ds['eBSA']   = ds.apply(lambda row: estimate_BSA(row.height, row.weight),  axis=1)
   ds['hasCKD'] = ds.apply(lambda row: hasCKD(row.eGFR, row.eACR, row.hasDM, row.hasHTN, row.hadCS, row.hadCVA, row.hadMI), axis=1)
 
-  # segments the dataset in gender and race groups
+  # segments the dataset into groups on which the analysis is based
   ds['segment'] = ds.apply(lambda row: '{0}{1}'.format(row.Gender, row.Race), axis=1)
   #ds['segment'] = ds.apply(lambda row: '{0}{1}{2}'.format(row.Gender, row.Race, 1 if (row.hasDM + row.hasHTN + row.hadCS + row.hadCVA + row.hadMI) > 0 else 0), axis=1)
 
@@ -250,7 +268,6 @@ def doit(Tr_healthy, Te_healthy, Te_unhealthy, params):
     """
     Performance metric used in assessing the hypothesis
     """
-    #print(agepairs[0:3])
     agediffs = [(age_real - age_pred) for (age_real, age_pred) in agepairs]    # bias
     #agediffs = [abs(age_real - age_pred) for (age_real, age_pred) in agepairs] # MAE
     return np.mean(agediffs)
@@ -348,11 +365,12 @@ def main(dataset, n_neighbors, tries):
   ECO_SEED = 20
   np.random.seed(ECO_SEED)
 
+  print()
   if dataset.lower() == 'elsa':
-    print('Loading and preprocessing the PNS 2013 lab exams dataset')
+    print('Loading and preprocessing the ELSA dataset')
     ds = load_ELSA()
   elif(dataset.lower() == 'pns'):
-    print('Loading and preprocessing the ELSA dataset')
+    print('Loading and preprocessing the PNS 2013 lab exams dataset')
     ds = load_PNS2013lab()
   print(ds.info())
 
