@@ -157,7 +157,7 @@ def load_PNS2013lab():
     ds[field] = pd.to_numeric(ds[field], errors='coerce', downcast = 'float')
   ds.dropna(inplace = True)
 
-  # xxx recasts some columns to other data types
+  # recasts some columns to other data types
   for field in ['regiao', 'Gender', 'Race', 'Age']:
     ds[field] = ds[field].astype(int)
 
@@ -166,11 +166,10 @@ def load_PNS2013lab():
   ds['eGFR']   = ds.apply(lambda row: estimate_GFR_CKDEPI(row.SCr, row.Age, row.Gender, row.Race), axis=1)
   ds['eBSA']   = ds.apply(lambda row: estimate_BSA(row.height, row.weight),  axis=1)
   ds['hasCKD'] = ds.apply(lambda row: hasCKD(row.eGFR, 0.0, row.hasDM, row.hasHTN, row.hadCS, row.hadCVA, row.hadMI), axis=1)
-  #ds['hasCKD'] = ds.apply(lambda row: hasCKD(row.eGFR, 0.0, 0, 0, 0, 0, 0), axis=1)
 
   # segments the dataset into groups on which the analysis is based
   ds['segment'] = ds.apply(lambda row: '{0}{1}'.format(int(row.Gender), int(row.Race)), axis=1)
-  #ds['segment'] = ds.apply(lambda row: '{0}{1}{2}'.format(row.Gender, row.Race, 1 if (row.hasDM + row.hasHTN + row.hadCS + row.hadCVA + row.hadMI) > 0 else 0), axis=1)
+  #ds['segment'] = ds.apply(lambda row: '{0}{1}{2}'.format(int(row.Gender), int(row.Race), 1 if (row.hasDM + row.hasHTN + row.hadCS + row.hadCVA + row.hadMI) > 0 else 0), axis=1)
 
   return ds
 
@@ -268,8 +267,8 @@ def doit(Tr_healthy, Te_healthy, Te_unhealthy, params):
     """
     Performance metric used in assessing the hypothesis
     """
-    agediffs = [(age_real - age_pred) for (age_real, age_pred) in agepairs]    # bias
-    #agediffs = [abs(age_real - age_pred) for (age_real, age_pred) in agepairs] # MAE
+    #agediffs = [(age_real - age_pred) for (age_real, age_pred) in agepairs]    # bias
+    agediffs = [abs(age_real - age_pred) for (age_real, age_pred) in agepairs] # MAE
     return np.mean(agediffs)
 
     #agediffs = [(age_real - age_pred)**2 for (age_real, age_pred) in agepairs] # RMSE
@@ -295,11 +294,14 @@ def doit(Tr_healthy, Te_healthy, Te_unhealthy, params):
     # trains a nearest neighbour model using data from Tr_healthy (only healthy individuals)
     model = NearestNeighbors(n_neighbors = n_neighbors, algorithm = 'auto', metric = 'minkowski', p = 2)
     X = Tr_healthy[predVars].loc[(Tr_healthy.segment == segment)].to_numpy()
+    scaler = X.max(axis=0)
+    X = X / scaler
     y = Tr_healthy[outcome ].loc[(Tr_healthy.segment == segment)].to_numpy()
     model.fit(X)
 
     # evaluates the performance metric of age prediction for healthy individuals
     Xneg = Te_healthy[predVars].loc[(Te_healthy.segment == segment)].to_numpy()
+    Xneg = Xneg / scaler
     yneg = Te_healthy[outcome ].loc[(Te_healthy.segment == segment)].to_numpy()
     (nrows, _) = Xneg.shape
     partsizes['ckd-'][segment] = nrows
@@ -308,10 +310,12 @@ def doit(Tr_healthy, Te_healthy, Te_unhealthy, params):
       dists, neighbors = model.kneighbors(Xneg[i].reshape(1, -1), return_distance=True)
       eAge = estimageAge(dists, y[neighbors])
       agepairs.append((yneg[i], eAge))
+      #xxx.append(('ckd-', segment, yneg[i], eAge))
     pm_neg[segment] = pm(agepairs)
 
     # evaluates the performance metric of age prediction for unhealthy individuals
     Xpos = Te_unhealthy[predVars].loc[(Te_unhealthy.segment == segment)].to_numpy()
+    Xpos = Xpos / scaler
     ypos = Te_unhealthy[outcome ].loc[(Te_unhealthy.segment == segment)].to_numpy()
     (nrows, _) = Xpos.shape
     partsizes['ckd+'][segment] = nrows
@@ -340,11 +344,8 @@ def assess_hyphothesis(pm_neg_segs, pm_pos_segs, tries, partsizes):
   cis_pm_neg = []
   cis_pm_pos = []
   for segment in segments:
-    try:
-      ci_pm_neg = bootstrap([pm_neg_values[segment],], np.mean).confidence_interval
-      ci_pm_pos = bootstrap([pm_pos_values[segment],], np.mean).confidence_interval
-    except RuntimeWarning:
-      breakpoint()
+    ci_pm_neg = bootstrap([pm_neg_values[segment],], np.mean).confidence_interval
+    ci_pm_pos = bootstrap([pm_pos_values[segment],], np.mean).confidence_interval
     hypothesis = ci_pm_neg.high < ci_pm_pos.low
     complement = 'CKD- [{0:4.1f}, {1:4.1f}] #{2:4d}, CKD+ [{3:4.1f}, {4:4.1f}] #{5:4d}'.format(
                        ci_pm_neg.low, ci_pm_neg.high, partsizes['ckd-'][segment],
