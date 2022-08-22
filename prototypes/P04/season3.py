@@ -46,7 +46,7 @@ def estimate_GFR_CKDEPI(scr, age, gender, race):
 
 def estimate_GFR_DCE(ucr, scr, uvol, udur, height, weight):
   # parameters:
-  #   ucr is unine creatinine measured in mg/dL using (PREENCHER tipo de assay, see https://youtu.be/KcoeVtiYGpU)
+  #   ucr is urine creatinine measured in mg/dL using (PREENCHER tipo de assay, see https://youtu.be/KcoeVtiYGpU)
   #   scr is serum creatinine measured in mg/dL using (PREENCHER tipo de assay, see https://youtu.be/KcoeVtiYGpU)
   #   uvol é o volume coletado de urina, em mL
   #   udur é a duração da coleta de urina, em minutos (valores típicos em torno de 660 a 720)
@@ -267,8 +267,8 @@ def doit(Tr_healthy, Te_healthy, Te_unhealthy, params):
     """
     Performance metric used in assessing the hypothesis
     """
-    #agediffs = [(age_real - age_pred) for (age_real, age_pred) in agepairs]    # bias
-    agediffs = [abs(age_real - age_pred) for (age_real, age_pred) in agepairs] # MAE
+    agediffs = [(age_real - age_pred) for (age_real, age_pred) in agepairs]    # bias
+    #agediffs = [abs(age_real - age_pred) for (age_real, age_pred) in agepairs] # MAE
     return np.mean(agediffs)
 
     #agediffs = [(age_real - age_pred)**2 for (age_real, age_pred) in agepairs] # RMSE
@@ -381,9 +381,20 @@ def main(dataset, n_neighbors, tries):
   print('-- number of CKD- individuals: {0:5d}'.format(num_of_ckdneg))
 
   print('Learning and assessing the model of renal age')
-  #predVars = ['eDCE', 'SCr', 'eACR', 'height', 'weight']
-  predVars = ['height', 'weight', 'SCr']
+
+  #predVars = ['height', 'weight']
+  #outcome  = 'eBSA'
+
+  #predVars = ['height', 'weight', 'SCr', 'UCr', 'UVol', 'UDur']
+  #outcome  = 'eDCE'
+
+  # xxx
+  # por que (height,weight) prediz eBSA com precisão, e
+  # (height,weight,SCR,UCr,UVol,UDur) não prediz eDCE com a mesma precisão?
+
+  predVars = ['height', 'weight', 'SCr', 'UCr']
   outcome  = 'Age'
+
   params = (predVars, outcome, n_neighbors)
   pm_neg_segs = []
   pm_pos_segs = []
