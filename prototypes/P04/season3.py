@@ -58,7 +58,7 @@ def estimate_GFR_DCE(ucr, scr, uvol, udur, height, weight):
   # ... se deve ao fato desta (PREENCHER)
 
   bsa = estimate_BSA(height, weight)
-  eGFR = (ucr /scr) * (uvol / udur) * (1.73 / bsa)
+  eGFR = (ucr / scr) * (uvol / udur) * (1.73 / bsa)
   return eGFR
 
 def estimate_ACR(ualb, udur, ucr, uvol):
@@ -298,6 +298,7 @@ def doit(Tr_healthy, Te_healthy, Te_unhealthy, params):
     X = X / scaler
     y = Tr_healthy[outcome ].loc[(Tr_healthy.segment == segment)].to_numpy()
     model.fit(X)
+    np.savetxt('temp.csv', np.hstack((X,y.reshape(X.shape[0],1))))
 
     # evaluates the performance metric of age prediction for healthy individuals
     Xneg = Te_healthy[predVars].loc[(Te_healthy.segment == segment)].to_numpy()
@@ -385,14 +386,21 @@ def main(dataset, n_neighbors, tries):
   #predVars = ['height', 'weight']
   #outcome  = 'eBSA'
 
+  #predVars = ['eBSA']
+  #outcome  = 'weight'
+  #outcome  = 'height'
+
   #predVars = ['height', 'weight', 'SCr', 'UCr', 'UVol', 'UDur']
   #outcome  = 'eDCE'
 
   # xxx
   # por que (height,weight) prediz eBSA com precisão, e
-  # (height,weight,SCR,UCr,UVol,UDur) não prediz eDCE com a mesma precisão?
+  # (height,weight,SCr,UCr,UVol,UDur) não prediz eDCE com a mesma precisão?
 
-  predVars = ['height', 'weight', 'SCr', 'UCr']
+  #predVars = ['height', 'weight', 'SCr']
+  #outcome  = 'Age'
+
+  predVars = ['eBSA', 'SCr']
   outcome  = 'Age'
 
   params = (predVars, outcome, n_neighbors)
