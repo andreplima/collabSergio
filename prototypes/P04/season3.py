@@ -1,5 +1,6 @@
 # next task - make loaders as similar as possible
 import sys
+import codecs
 import numpy as np
 import pandas as pd
 
@@ -10,6 +11,11 @@ from sklearn.neighbors import NearestNeighbors
 
 import warnings
 warnings.filterwarnings('error')
+
+def saveAsText(content, filename, _encoding='utf-8'):
+  f = codecs.open(filename, 'w', encoding=_encoding)
+  f.write(content)
+  f.close()
 
 def estimate_GFR_CKDEPI(scr, age, gender, race):
   """
@@ -258,7 +264,7 @@ def split(ds):
 
   return (Tr_healthy, Te_healthy, Te_unhealthy)
 
-def doit(Tr_healthy, Te_healthy, Te_unhealthy, params):
+def doit(iter, Tr_healthy, Te_healthy, Te_unhealthy, params):
 
   # recover the model parameters
   (predVars, outcome, n_neighbors) = params
@@ -289,6 +295,8 @@ def doit(Tr_healthy, Te_healthy, Te_unhealthy, params):
   pm_pos = {}
   partsizes = defaultdict(dict)
   segments = Tr_healthy['segment'].unique()
+  preds = []
+  buffer = '{0}\t{1}\t{2}\t{3}\t{4}\t{5}\t{6}\t{7}\t{8}\t{9}'
   for segment in sorted(segments):
 
     # trains a nearest neighbour model using data from Tr_healthy (only healthy individuals)
@@ -298,12 +306,22 @@ def doit(Tr_healthy, Te_healthy, Te_unhealthy, params):
     X = X / scaler
     y = Tr_healthy[outcome ].loc[(Tr_healthy.segment == segment)].to_numpy()
     model.fit(X)
-    np.savetxt('temp.csv', np.hstack((X,y.reshape(X.shape[0],1))))
+    np.savetxt('X.csv', np.hstack((X,y.reshape(X.shape[0],1))))
+
+    #
+    Xneg = Te_healthy[predVars].loc[(Te_healthy.segment == segment)].to_numpy()
+    yneg = Te_healthy[outcome ].loc[(Te_healthy.segment == segment)].to_numpy()
+    Xpos = Te_unhealthy[predVars].loc[(Te_unhealthy.segment == segment)].to_numpy()
+    ypos = Te_unhealthy[outcome ].loc[(Te_unhealthy.segment == segment)].to_numpy()
+    nsamples = min(Xneg.shape[0], Xpos.shape[0])
 
     # evaluates the performance metric of age prediction for healthy individuals
-    Xneg = Te_healthy[predVars].loc[(Te_healthy.segment == segment)].to_numpy()
-    Xneg = Xneg / scaler
-    yneg = Te_healthy[outcome ].loc[(Te_healthy.segment == segment)].to_numpy()
+    #Xneg = Te_healthy[predVars].loc[(Te_healthy.segment == segment)].to_numpy()
+    #Xneg = Xneg / scaler
+    #yneg = Te_healthy[outcome ].loc[(Te_healthy.segment == segment)].to_numpy()
+    Xneg = Xneg[:nsamples] / scaler
+    yneg = yneg[:nsamples]
+    np.savetxt('Xneg.csv', np.hstack((Xneg,yneg.reshape(Xneg.shape[0],1))))
     (nrows, _) = Xneg.shape
     partsizes['ckd-'][segment] = nrows
     agepairs = []
@@ -311,13 +329,16 @@ def doit(Tr_healthy, Te_healthy, Te_unhealthy, params):
       dists, neighbors = model.kneighbors(Xneg[i].reshape(1, -1), return_distance=True)
       eAge = estimageAge(dists, y[neighbors])
       agepairs.append((yneg[i], eAge))
-      #xxx.append(('ckd-', segment, yneg[i], eAge))
+      preds.append(buffer.format(iter, segment, 'CKD-', i, yneg[i], eAge, neighbors[0], dists[0], y[neighbors[0]], y[neighbors[0]].mean()))
     pm_neg[segment] = pm(agepairs)
 
     # evaluates the performance metric of age prediction for unhealthy individuals
-    Xpos = Te_unhealthy[predVars].loc[(Te_unhealthy.segment == segment)].to_numpy()
-    Xpos = Xpos / scaler
-    ypos = Te_unhealthy[outcome ].loc[(Te_unhealthy.segment == segment)].to_numpy()
+    #Xpos = Te_unhealthy[predVars].loc[(Te_unhealthy.segment == segment)].to_numpy()
+    #Xpos = Xpos / scaler
+    #ypos = Te_unhealthy[outcome ].loc[(Te_unhealthy.segment == segment)].to_numpy()
+    Xpos = Xpos[:nsamples] / scaler
+    ypos = ypos[:nsamples]
+    np.savetxt('Xpos.csv', np.hstack((Xpos,ypos.reshape(Xpos.shape[0],1))))
     (nrows, _) = Xpos.shape
     partsizes['ckd+'][segment] = nrows
     agepairs = []
@@ -325,9 +346,10 @@ def doit(Tr_healthy, Te_healthy, Te_unhealthy, params):
       dists, neighbors = model.kneighbors(Xpos[i].reshape(1, -1), return_distance=True)
       eAge = estimageAge(dists, y[neighbors])
       agepairs.append((ypos[i], eAge))
+      preds.append(buffer.format(iter, segment, 'CKD+', i, ypos[i], eAge, neighbors[0], dists[0], y[neighbors[0]], y[neighbors[0]].mean()))
     pm_pos[segment] = pm(agepairs)
 
-  return (pm_neg, pm_pos, partsizes)
+  return (pm_neg, pm_pos, partsizes, preds)
 
 def assess_hyphothesis(pm_neg_segs, pm_pos_segs, tries, partsizes):
 
@@ -366,6 +388,7 @@ def main(dataset, n_neighbors, tries):
 
   ECO_SEED = 20
   np.random.seed(ECO_SEED)
+  np.set_printoptions(precision=5, suppress=True)
 
   print()
   if dataset.lower() == 'elsa':
@@ -406,12 +429,17 @@ def main(dataset, n_neighbors, tries):
   params = (predVars, outcome, n_neighbors)
   pm_neg_segs = []
   pm_pos_segs = []
-  for i in range(tries):
-    print('-- iteration {0:2d}'.format(i+1))
+  buffer = '{0}\t{1}\t{2}\t{3}\t{4}\t{5}\t{6}\t{7}\t{8}\t{9}'
+  header = buffer.format('iter', 'segment', 'group', 'id', 'age', '*age', 'neighbors-ids', 'neighbors-dists', 'neighbors-ages', 'neighbors-ages-mean')
+  predictions = [header]
+  for iter in range(tries):
+    print('-- iteration {0:2d}'.format(iter+1))
     (Tr_healthy, Te_healthy, Te_unhealthy) = split(ds)
-    (pm_neg, pm_pos, partsizes) = doit(Tr_healthy, Te_healthy, Te_unhealthy, params)
+    (pm_neg, pm_pos, partsizes, preds) = doit(iter+1, Tr_healthy, Te_healthy, Te_unhealthy, params)
     pm_neg_segs.append(pm_neg)
     pm_pos_segs.append(pm_pos)
+    predictions = predictions + preds
+  saveAsText('\n'.join(predictions), 'predictions.csv')
 
   # checks if the hypothesis is supported by the obtained results
   print('Assessing the hypothesis')
