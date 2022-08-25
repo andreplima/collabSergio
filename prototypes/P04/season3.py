@@ -1,17 +1,36 @@
 # next task - make loaders as similar as possible
 import sys
 import codecs
+import pickle
 import numpy as np
 import pandas as pd
 
 from os.path     import exists
 from collections import defaultdict
 from scipy.stats import bootstrap
-from sklearn.neighbors import NearestNeighbors
-from sharedDefs import serialise
+
+from sklearn.neighbors      import NearestNeighbors
+from sklearn.linear_model   import LinearRegression
+from sklearn.neural_network import MLPRegressor
+from sklearn.preprocessing  import StandardScaler
 
 import warnings
 warnings.filterwarnings('error')
+
+def serialise(obj, name):
+  f = open(name + '.pkl', 'wb')
+  p = pickle.Pickler(f)
+  p.fast = True
+  p.dump(obj)
+  f.close()
+  p.clear_memo()
+
+def deserialise(name):
+  f = open(name + '.pkl', 'rb')
+  p = pickle.Unpickler(f)
+  obj = p.load()
+  f.close()
+  return obj
 
 def saveAsText(content, filename, _encoding='utf-8'):
   f = codecs.open(filename, 'w', encoding=_encoding)
@@ -280,7 +299,7 @@ def doit(iter, Tr_healthy, Te_healthy, Te_unhealthy, params):
     #agediffs = [(age_real - age_pred)**2 for (age_real, age_pred) in agepairs] # RMSE
     #return np.sqrt(np.mean(agediffs))
 
-  def estimageAge(dists, ages):
+  def estimageAge(dists, attribs, neigh_attribs, neigh_ages):
     """
     Computes the average age of nearest neighbours weighted by their distances to the queried sample
     """
@@ -288,7 +307,16 @@ def doit(iter, Tr_healthy, Te_healthy, Te_unhealthy, params):
     dists_rec = 1/(dists[0] + epsilon)
     sum_dists_rec = dists_rec.sum()
     weights = dists_rec/sum_dists_rec
-    eAge = ages.dot(weights)[0]
+    eAge = neigh_ages.dot(weights)[0]
+
+    #localModel = LinearRegression()
+    #localModel.fit(neigh_attribs, neigh_ages.transpose(), weights)
+    #eAge = localModel.predict(attribs)[0][0]
+
+    #localModel = MLPRegressor(max_iter=100000, early_stopping = True)
+    #localModel.fit(neigh_attribs, neigh_ages.ravel())
+    #eAge = localModel.predict(attribs)[0]
+
     return eAge
 
   pm_neg = {}
@@ -305,8 +333,8 @@ def doit(iter, Tr_healthy, Te_healthy, Te_unhealthy, params):
     tr_ids = data['ID'].to_numpy()
     X = data[predVars].to_numpy()
     y = data[outcome ].to_numpy()
-    scaler = np.ones(len(predVars)) #X.max(axis=0)
-    X = X / scaler
+    scaler = StandardScaler(with_mean = False, with_std = False).fit(X)
+    X = scaler.transform(X)
     model.fit(X)
 
     # determines the size of the test samples for the current segment
@@ -319,12 +347,13 @@ def doit(iter, Tr_healthy, Te_healthy, Te_unhealthy, params):
     te_ids = data['ID'].to_numpy()
     Xneg = data[predVars].to_numpy()
     yneg = data[outcome ].to_numpy()
-    Xneg = Xneg / scaler
+    Xneg = scaler.transform(Xneg)
     partsizes['ckd-'][segment] = ss
     agepairs = []
     for i in range(ss):
+      #print(i)
       dists, neighbors = model.kneighbors(Xneg[i].reshape(1, -1), return_distance=True)
-      eAge = estimageAge(dists, y[neighbors])
+      eAge = estimageAge(dists, Xneg[i].reshape(1, -1), X[neighbors[0]], y[neighbors])
       agepairs.append((yneg[i], eAge))
       preds.append(buffer.format(iter, segment, 'CKD-', te_ids[i], yneg[i], Xneg[i], eAge, tr_ids[neighbors[0]], dists[0], y[neighbors[0]], np.array2string(X[neighbors[0]]).replace('\n', ' '), y[neighbors[0]].mean()))
     pm_neg[segment] = pm(agepairs)
@@ -334,12 +363,13 @@ def doit(iter, Tr_healthy, Te_healthy, Te_unhealthy, params):
     te_ids = data['ID'].to_numpy()
     Xpos = data[predVars].to_numpy()
     ypos = data[outcome ].to_numpy()
-    Xpos = Xpos / scaler
+    Xpos = scaler.transform(Xpos)
     partsizes['ckd+'][segment] = ss
     agepairs = []
     for i in range(ss):
+      #print(i)
       dists, neighbors = model.kneighbors(Xpos[i].reshape(1, -1), return_distance=True)
-      eAge = estimageAge(dists, y[neighbors])
+      eAge = estimageAge(dists, Xpos[i].reshape(1, -1), X[neighbors[0]], y[neighbors])
       agepairs.append((ypos[i], eAge))
       preds.append(buffer.format(iter, segment, 'CKD+', te_ids[i], ypos[i], Xpos[i], eAge, tr_ids[neighbors[0]], dists[0], y[neighbors[0]], np.array2string(X[neighbors[0]]).replace('\n', ' '), y[neighbors[0]].mean()))
     pm_pos[segment] = pm(agepairs)
