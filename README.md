@@ -1,2 +1,2 @@
 # collabSergio
-Collaboration with Sergio, Lisias, Brunela, and Wagner 
+Collaboration with Sergio e Brunela
