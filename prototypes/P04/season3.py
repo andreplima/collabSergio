@@ -8,6 +8,7 @@ from os.path     import exists
 from collections import defaultdict
 from scipy.stats import bootstrap
 from sklearn.neighbors import NearestNeighbors
+from sharedDefs import serialise
 
 import warnings
 warnings.filterwarnings('error')
@@ -168,14 +169,13 @@ def load_PNS2013lab():
     ds[field] = ds[field].astype(int)
 
   # extends the dataset with new derived columns
-  ds['ID']     = ds.index
+  ds['ID']     = ds.apply(lambda row: 'P{0:05d}'.format(row.name), axis=1)
   ds['eGFR']   = ds.apply(lambda row: estimate_GFR_CKDEPI(row.SCr, row.Age, row.Gender, row.Race), axis=1)
   ds['eBSA']   = ds.apply(lambda row: estimate_BSA(row.height, row.weight),  axis=1)
   ds['hasCKD'] = ds.apply(lambda row: hasCKD(row.eGFR, 0.0, row.hasDM, row.hasHTN, row.hadCS, row.hadCVA, row.hadMI), axis=1)
 
   # segments the dataset into groups on which the analysis is based
   ds['segment'] = ds.apply(lambda row: '{0}{1}'.format(int(row.Gender), int(row.Race)), axis=1)
-  #ds['segment'] = ds.apply(lambda row: '{0}{1}{2}'.format(int(row.Gender), int(row.Race), 1 if (row.hasDM + row.hasHTN + row.hadCS + row.hadCVA + row.hadMI) > 0 else 0), axis=1)
 
   return ds
 
@@ -273,8 +273,8 @@ def doit(iter, Tr_healthy, Te_healthy, Te_unhealthy, params):
     """
     Performance metric used in assessing the hypothesis
     """
-    #agediffs = [(age_real - age_pred) for (age_real, age_pred) in agepairs]    # bias
-    agediffs = [abs(age_real - age_pred) for (age_real, age_pred) in agepairs] # MAE
+    agediffs = [(age_real - age_pred) for (age_real, age_pred) in agepairs]    # bias
+    #agediffs = [abs(age_real - age_pred) for (age_real, age_pred) in agepairs] # MAE
     return np.mean(agediffs)
 
     #agediffs = [(age_real - age_pred)**2 for (age_real, age_pred) in agepairs] # RMSE
@@ -296,57 +296,52 @@ def doit(iter, Tr_healthy, Te_healthy, Te_unhealthy, params):
   partsizes = defaultdict(dict)
   segments = Tr_healthy['segment'].unique()
   preds = []
-  buffer = '{0}\t{1}\t{2}\t{3}\t{4}\t{5}\t{6}\t{7}\t{8}\t{9}'
+  buffer = '{0}\t#{1}\t{2}\t{3}\t{4}\t{5}\t{6}\t{7}\t{8}\t{9}\t{10}\t{11}'
   for segment in sorted(segments):
 
-    # trains a nearest neighbour model using data from Tr_healthy (only healthy individuals)
+    # trains a nearest neighbour model using data from a single segment of Tr_healthy
     model = NearestNeighbors(n_neighbors = n_neighbors, algorithm = 'auto', metric = 'minkowski', p = 2)
-    X = Tr_healthy[predVars].loc[(Tr_healthy.segment == segment)].to_numpy()
-    scaler = X.max(axis=0)
+    data  = Tr_healthy.loc[Tr_healthy.segment == segment]
+    tr_ids = data['ID'].to_numpy()
+    X = data[predVars].to_numpy()
+    y = data[outcome ].to_numpy()
+    scaler = np.ones(len(predVars)) #X.max(axis=0)
     X = X / scaler
-    y = Tr_healthy[outcome ].loc[(Tr_healthy.segment == segment)].to_numpy()
     model.fit(X)
-    #np.savetxt('X.csv', np.hstack((X,y.reshape(X.shape[0],1))))
 
-    #
-    Xneg = Te_healthy[predVars].loc[(Te_healthy.segment == segment)].to_numpy()
-    yneg = Te_healthy[outcome ].loc[(Te_healthy.segment == segment)].to_numpy()
-    Xpos = Te_unhealthy[predVars].loc[(Te_unhealthy.segment == segment)].to_numpy()
-    ypos = Te_unhealthy[outcome ].loc[(Te_unhealthy.segment == segment)].to_numpy()
-    nsamples = min(Xneg.shape[0], Xpos.shape[0])
+    # determines the size of the test samples for the current segment
+    n_ckdneg = len(Te_healthy.loc[    Te_healthy.segment == segment])
+    n_ckdpos = len(Te_unhealthy.loc[Te_unhealthy.segment == segment])
+    ss = min(n_ckdneg, n_ckdpos)
 
-    # evaluates the performance metric of age prediction for healthy individuals
-    #Xneg = Te_healthy[predVars].loc[(Te_healthy.segment == segment)].to_numpy()
-    #Xneg = Xneg / scaler
-    #yneg = Te_healthy[outcome ].loc[(Te_healthy.segment == segment)].to_numpy()
-    Xneg = Xneg[:nsamples] / scaler
-    yneg = yneg[:nsamples]
-    #np.savetxt('Xneg.csv', np.hstack((Xneg,yneg.reshape(Xneg.shape[0],1))))
-    (nrows, _) = Xneg.shape
-    partsizes['ckd-'][segment] = nrows
+    # evaluates the performance metric on a sample of healthy individuals (CKD-)
+    data = Te_healthy.loc[Te_healthy.segment == segment]
+    te_ids = data['ID'].to_numpy()
+    Xneg = data[predVars].to_numpy()
+    yneg = data[outcome ].to_numpy()
+    Xneg = Xneg / scaler
+    partsizes['ckd-'][segment] = ss
     agepairs = []
-    for i in range(nrows):
+    for i in range(ss):
       dists, neighbors = model.kneighbors(Xneg[i].reshape(1, -1), return_distance=True)
       eAge = estimageAge(dists, y[neighbors])
       agepairs.append((yneg[i], eAge))
-      preds.append(buffer.format(iter, segment, 'CKD-', i, yneg[i], eAge, neighbors[0], dists[0], y[neighbors[0]], y[neighbors[0]].mean()))
+      preds.append(buffer.format(iter, segment, 'CKD-', te_ids[i], yneg[i], Xneg[i], eAge, tr_ids[neighbors[0]], dists[0], y[neighbors[0]], np.array2string(X[neighbors[0]]).replace('\n', ' '), y[neighbors[0]].mean()))
     pm_neg[segment] = pm(agepairs)
 
-    # evaluates the performance metric of age prediction for unhealthy individuals
-    #Xpos = Te_unhealthy[predVars].loc[(Te_unhealthy.segment == segment)].to_numpy()
-    #Xpos = Xpos / scaler
-    #ypos = Te_unhealthy[outcome ].loc[(Te_unhealthy.segment == segment)].to_numpy()
-    Xpos = Xpos[:nsamples] / scaler
-    ypos = ypos[:nsamples]
-    #np.savetxt('Xpos.csv', np.hstack((Xpos,ypos.reshape(Xpos.shape[0],1))))
-    (nrows, _) = Xpos.shape
-    partsizes['ckd+'][segment] = nrows
+    # evaluates the performance metric on a sample of unhealthy individuals (CKD+)
+    data = Te_unhealthy.loc[Te_unhealthy.segment == segment]
+    te_ids = data['ID'].to_numpy()
+    Xpos = data[predVars].to_numpy()
+    ypos = data[outcome ].to_numpy()
+    Xpos = Xpos / scaler
+    partsizes['ckd+'][segment] = ss
     agepairs = []
-    for i in range(nrows):
+    for i in range(ss):
       dists, neighbors = model.kneighbors(Xpos[i].reshape(1, -1), return_distance=True)
       eAge = estimageAge(dists, y[neighbors])
       agepairs.append((ypos[i], eAge))
-      preds.append(buffer.format(iter, segment, 'CKD+', i, ypos[i], eAge, neighbors[0], dists[0], y[neighbors[0]], y[neighbors[0]].mean()))
+      preds.append(buffer.format(iter, segment, 'CKD+', te_ids[i], ypos[i], Xpos[i], eAge, tr_ids[neighbors[0]], dists[0], y[neighbors[0]], np.array2string(X[neighbors[0]]).replace('\n', ' '), y[neighbors[0]].mean()))
     pm_pos[segment] = pm(agepairs)
 
   return (pm_neg, pm_pos, partsizes, preds)
@@ -388,7 +383,7 @@ def main(dataset, n_neighbors, tries):
 
   ECO_SEED = 20
   np.random.seed(ECO_SEED)
-  np.set_printoptions(precision=5, suppress=True)
+  np.set_printoptions(precision=5, suppress=True, linewidth=3000)
 
   print()
   if dataset.lower() == 'elsa':
@@ -399,12 +394,14 @@ def main(dataset, n_neighbors, tries):
     ds = load_PNS2013lab()
   print(ds.info())
 
+  serialise(ds, 'dataset')
+
   num_of_ckdpos = len(ds.loc[(ds['hasCKD'] >  0)])
   num_of_ckdneg = len(ds.loc[(ds['hasCKD'] == 0)])
   print('-- number of CKD+ individuals: {0:5d}'.format(num_of_ckdpos))
   print('-- number of CKD- individuals: {0:5d}'.format(num_of_ckdneg))
 
-  print('Learning and assessing the model of renal age')
+  print('Learning and assessing a predictive model for kidney ageing')
 
   #predVars = ['height', 'weight']
   #outcome  = 'eBSA'
@@ -423,14 +420,14 @@ def main(dataset, n_neighbors, tries):
   #predVars = ['height', 'weight', 'SCr']
   #outcome  = 'Age'
 
-  predVars = ['eBSA', 'SCr']
+  predVars = ['eBSA', 'SCr', 'UCr']
   outcome  = 'Age'
 
   params = (predVars, outcome, n_neighbors)
   pm_neg_segs = []
   pm_pos_segs = []
-  buffer = '{0}\t{1}\t{2}\t{3}\t{4}\t{5}\t{6}\t{7}\t{8}\t{9}'
-  header = buffer.format('iter', 'segment', 'group', 'id', 'age', '*age', 'neighbors-ids', 'neighbors-dists', 'neighbors-ages', 'neighbors-ages-mean')
+  buffer = '{0}\t{1}\t{2}\t{3}\t{4}\t{5}\t{6}\t{7}\t{8}\t{9}\t{10}\t{11}'
+  header = buffer.format('iter', 'segment', 'group', 'id', 'age', 'attrs', '*age', 'neighbors-ids', 'neighbors-dists', 'neighbors-ages', 'neighbors-attrs', 'neighbors-ages-mean')
   predictions = [header]
   for iter in range(tries):
     print('-- iteration {0:2d}'.format(iter+1))
@@ -439,7 +436,7 @@ def main(dataset, n_neighbors, tries):
     pm_neg_segs.append(pm_neg)
     pm_pos_segs.append(pm_pos)
     predictions = predictions + preds
-  saveAsText('\n'.join(predictions), 'predictions.csv')
+  saveAsText('\n'.join(predictions), 'trace.csv')
 
   # checks if the hypothesis is supported by the obtained results
   print('Assessing the hypothesis')
