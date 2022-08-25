@@ -273,8 +273,8 @@ def doit(iter, Tr_healthy, Te_healthy, Te_unhealthy, params):
     """
     Performance metric used in assessing the hypothesis
     """
-    agediffs = [(age_real - age_pred) for (age_real, age_pred) in agepairs]    # bias
-    #agediffs = [abs(age_real - age_pred) for (age_real, age_pred) in agepairs] # MAE
+    #agediffs = [(age_real - age_pred) for (age_real, age_pred) in agepairs]    # bias
+    agediffs = [abs(age_real - age_pred) for (age_real, age_pred) in agepairs] # MAE
     return np.mean(agediffs)
 
     #agediffs = [(age_real - age_pred)**2 for (age_real, age_pred) in agepairs] # RMSE
@@ -306,7 +306,7 @@ def doit(iter, Tr_healthy, Te_healthy, Te_unhealthy, params):
     X = X / scaler
     y = Tr_healthy[outcome ].loc[(Tr_healthy.segment == segment)].to_numpy()
     model.fit(X)
-    np.savetxt('X.csv', np.hstack((X,y.reshape(X.shape[0],1))))
+    #np.savetxt('X.csv', np.hstack((X,y.reshape(X.shape[0],1))))
 
     #
     Xneg = Te_healthy[predVars].loc[(Te_healthy.segment == segment)].to_numpy()
@@ -321,7 +321,7 @@ def doit(iter, Tr_healthy, Te_healthy, Te_unhealthy, params):
     #yneg = Te_healthy[outcome ].loc[(Te_healthy.segment == segment)].to_numpy()
     Xneg = Xneg[:nsamples] / scaler
     yneg = yneg[:nsamples]
-    np.savetxt('Xneg.csv', np.hstack((Xneg,yneg.reshape(Xneg.shape[0],1))))
+    #np.savetxt('Xneg.csv', np.hstack((Xneg,yneg.reshape(Xneg.shape[0],1))))
     (nrows, _) = Xneg.shape
     partsizes['ckd-'][segment] = nrows
     agepairs = []
@@ -338,7 +338,7 @@ def doit(iter, Tr_healthy, Te_healthy, Te_unhealthy, params):
     #ypos = Te_unhealthy[outcome ].loc[(Te_unhealthy.segment == segment)].to_numpy()
     Xpos = Xpos[:nsamples] / scaler
     ypos = ypos[:nsamples]
-    np.savetxt('Xpos.csv', np.hstack((Xpos,ypos.reshape(Xpos.shape[0],1))))
+    #np.savetxt('Xpos.csv', np.hstack((Xpos,ypos.reshape(Xpos.shape[0],1))))
     (nrows, _) = Xpos.shape
     partsizes['ckd+'][segment] = nrows
     agepairs = []
